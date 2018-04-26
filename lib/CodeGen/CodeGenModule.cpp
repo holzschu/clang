@@ -397,6 +397,7 @@ void CodeGenModule::Release() {
   emitMultiVersionFunctions();
   EmitCXXGlobalInitFunc();
   EmitCXXGlobalDtorFunc();
+  registerGlobalDtorsWithAtExit();
   EmitCXXThreadLocalInitFunc();
   if (ObjCRuntime)
     if (llvm::Function *ObjCInitFunction = ObjCRuntime->ModuleInitFunction())
@@ -570,7 +571,8 @@ void CodeGenModule::Release() {
   if (DebugInfo)
     DebugInfo->finalize();
 
-  EmitVersionIdentMetadata();
+  if (getCodeGenOpts().EmitVersionIdentMetadata)
+    EmitVersionIdentMetadata();
 
   EmitTargetMetadata();
 }
@@ -1026,6 +1028,11 @@ void CodeGenModule::AddGlobalCtor(llvm::Function *Ctor, int Priority,
 /// AddGlobalDtor - Add a function to the list that will be called
 /// when the module is unloaded.
 void CodeGenModule::AddGlobalDtor(llvm::Function *Dtor, int Priority) {
+  if (CodeGenOpts.RegisterGlobalDtorsWithAtExit) {
+    DtorsUsingAtExit[Priority].push_back(Dtor);
+    return;
+  }
+
   // FIXME: Type coercion of void()* types.
   GlobalDtors.push_back(Structor(Priority, Dtor, nullptr));
 }
@@ -1231,6 +1238,10 @@ void CodeGenModule::SetLLVMFunctionAttributesForDefinition(const Decl *D,
   unsigned alignment = D->getMaxAlignment() / Context.getCharWidth();
   if (alignment)
     F->setAlignment(alignment);
+
+  if (!D->hasAttr<AlignedAttr>())
+    if (LangOpts.FunctionAlignment)
+      F->setAlignment(1 << LangOpts.FunctionAlignment);
 
   // Some C++ ABIs require 2-byte alignment for member functions, in order to
   // reserve a bit for differentiating between virtual and non-virtual member
@@ -1556,6 +1567,12 @@ static void addLinkOptionsPostorder(CodeGenModule &CGM, Module *Mod,
   // Add linker options to link against the libraries/frameworks
   // described by this module.
   llvm::LLVMContext &Context = CGM.getLLVMContext();
+
+  // For modules that use export_as for linking, use that module
+  // name instead.
+  if (Mod->UseExportAsModuleLinkName)
+    return;
+
   for (unsigned I = Mod->LinkLibraries.size(); I > 0; --I) {
     // Link against a framework.  Frameworks are currently Darwin only, so we
     // don't to ask TargetCodeGenInfo for the spelling of the linker option.
@@ -3609,6 +3626,9 @@ void CodeGenModule::EmitGlobalFunctionDefinition(GlobalDecl GD,
   setGVProperties(Fn, GD);
 
   MaybeHandleStaticInExternC(D, Fn);
+
+  if (D->hasAttr<CUDAGlobalAttr>())
+    getTargetCodeGenInfo().setCUDAKernelCallingConvention(Fn);
 
   maybeSetTrivialComdat(*D, *Fn);
 

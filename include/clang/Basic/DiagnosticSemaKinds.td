@@ -602,6 +602,7 @@ def warn_redecl_library_builtin : Warning<
   "incompatible redeclaration of library function %0">,
   InGroup<DiagGroup<"incompatible-library-redeclaration">>;
 def err_builtin_definition : Error<"definition of builtin function %0">;
+def err_builtin_redeclare : Error<"cannot redeclare builtin function %0">;
 def err_arm_invalid_specialreg : Error<"invalid special register for builtin">;
 def err_invalid_cpu_supports : Error<"invalid cpu feature string for builtin">;
 def err_invalid_cpu_is : Error<"invalid cpu name for builtin">;
@@ -612,6 +613,13 @@ def err_function_needs_feature
             "'%2'">;
 def warn_builtin_unknown : Warning<"use of unknown builtin %0">,
   InGroup<ImplicitFunctionDeclare>, DefaultError;
+def warn_cstruct_memaccess : Warning<
+  "%select{destination for|source of|first operand of|second operand of}0 this "
+  "%1 call is a pointer to record %2 that is not trivial to "
+  "%select{primitive-default-initialize|primitive-copy}3">,
+  InGroup<DiagGroup<"nontrivial-memaccess">>;
+def note_nontrivial_field : Note<
+  "field is non-trivial to %select{copy|default-initialize}0">;
 def warn_dyn_class_memaccess : Warning<
   "%select{destination for|source of|first operand of|second operand of}0 this "
   "%1 call is a pointer to %select{|class containing a }2dynamic class %3; "
@@ -1031,7 +1039,7 @@ def warn_objc_pointer_masking : Warning<
 def warn_objc_pointer_masking_performSelector : Warning<warn_objc_pointer_masking.Text>,
   InGroup<ObjCPointerIntrospectPerformSelector>;
 def warn_objc_property_default_assign_on_object : Warning<
-  "default property attribute 'assign' not appropriate for non-GC object">,
+  "default property attribute 'assign' not appropriate for object">,
   InGroup<ObjCPropertyNoAttribute>;
 def warn_property_attr_mismatch : Warning<
   "property attribute in class extension does not match the primary class">,
@@ -2911,6 +2919,10 @@ def warn_mismatched_availability_override_unavail : Warning<
   "%select{the protocol method it implements|its overridden method}1 is "
   "available">,
   InGroup<Availability>;
+def warn_availability_on_static_initializer : Warning<
+  "ignoring availability attribute %select{on '+load' method|"
+  "with constructor attribute|with destructor attribute}0">,
+  InGroup<Availability>;
 def note_overridden_method : Note<
   "overridden method is here">;
 def note_protocol_method : Note<
@@ -3979,8 +3991,6 @@ def err_template_member_noparams : Error<
   "extraneous 'template<>' in declaration of member %0">;
 def err_template_tag_noparams : Error<
   "extraneous 'template<>' in declaration of %0 %1">;
-def err_template_decl_ref : Error<
-  "cannot refer to %select{class|variable}0 template %1 without a template argument list">;
 
 // C++ Template Argument Lists
 def err_template_missing_args : Error<
@@ -5600,9 +5610,12 @@ def warn_addition_in_bitshift : Warning<
   "operator '%0' has lower precedence than '%1'; "
   "'%1' will be evaluated first">, InGroup<ShiftOpParentheses>;
 
-def warn_self_assignment : Warning<
+def warn_self_assignment_builtin : Warning<
   "explicitly assigning value of variable of type %0 to itself">,
   InGroup<SelfAssignment>, DefaultIgnore;
+def warn_self_assignment_overloaded : Warning<
+  "explicitly assigning value of variable of type %0 to itself">,
+  InGroup<SelfAssignmentOverloaded>, DefaultIgnore;
 def warn_self_move : Warning<
   "explicitly moving variable of type %0 to itself">,
   InGroup<SelfMove>, DefaultIgnore;
@@ -7099,6 +7112,9 @@ def warn_atomic_op_has_invalid_memory_order : Warning<
   InGroup<DiagGroup<"atomic-memory-ordering">>;
 def err_atomic_op_has_invalid_synch_scope : Error<
   "synchronization scope argument to atomic operation is invalid">;
+def warn_atomic_op_misaligned : Warning<
+  "misaligned or large atomic operation may incur significant performance penalty">,
+  InGroup<DiagGroup<"atomic-alignment">>;
 
 def err_overflow_builtin_must_be_int : Error<
   "operand argument to overflow builtin must be an integer (%0 invalid)">;

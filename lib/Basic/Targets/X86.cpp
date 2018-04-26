@@ -244,6 +244,15 @@ bool X86TargetInfo::initFeatureMap(
     setFeatureEnabledImpl(Features, "fxsr", true);
     break;
 
+  case CK_Tremont:
+    setFeatureEnabledImpl(Features, "cldemote", true);
+    setFeatureEnabledImpl(Features, "gfni", true);
+    setFeatureEnabledImpl(Features, "waitpkg", true);
+    LLVM_FALLTHROUGH;
+  case CK_GoldmontPlus:
+    setFeatureEnabledImpl(Features, "rdpid", true);
+    setFeatureEnabledImpl(Features, "sgx", true);
+    LLVM_FALLTHROUGH;
   case CK_Goldmont:
     setFeatureEnabledImpl(Features, "sha", true);
     setFeatureEnabledImpl(Features, "rdseed", true);
@@ -810,6 +819,8 @@ bool X86TargetInfo::handleTargetFeatures(std::vector<std::string> &Features,
       HasRetpolineExternalThunk = true;
     } else if (Feature == "+sahf") {
       HasLAHFSAHF = true;
+    } else if (Feature == "+waitpkg") {
+      HasWAITPKG = true;
     }
 
     X86SSEEnum Level = llvm::StringSwitch<X86SSEEnum>(Feature)
@@ -929,6 +940,12 @@ void X86TargetInfo::getTargetDefines(const LangOptions &Opts,
     break;
   case CK_Goldmont:
     defineCPUMacros(Builder, "goldmont");
+    break;
+  case CK_GoldmontPlus:
+    defineCPUMacros(Builder, "goldmont_plus");
+    break;
+  case CK_Tremont:
+    defineCPUMacros(Builder, "tremont");
     break;
   case CK_Nehalem:
   case CK_Westmere:
@@ -1158,6 +1175,8 @@ void X86TargetInfo::getTargetDefines(const LangOptions &Opts,
     Builder.defineMacro("__RDPID__");
   if (HasCLDEMOTE)
     Builder.defineMacro("__CLDEMOTE__");
+  if (HasWAITPKG)
+    Builder.defineMacro("__WAITPKG__");
 
   // Each case falls through to the previous one here.
   switch (SSELevel) {
@@ -1309,6 +1328,7 @@ bool X86TargetInfo::isValidFeatureName(StringRef Name) const {
       .Case("vaes", true)
       .Case("vpclmulqdq", true)
       .Case("wbnoinvd", true)
+      .Case("waitpkg", true)
       .Case("x87", true)
       .Case("xop", true)
       .Case("xsave", true)
@@ -1385,6 +1405,7 @@ bool X86TargetInfo::hasFeature(StringRef Feature) const {
       .Case("vaes", HasVAES)
       .Case("vpclmulqdq", HasVPCLMULQDQ)
       .Case("wbnoinvd", HasWBNOINVD)
+      .Case("waitpkg", HasWAITPKG)
       .Case("x86", true)
       .Case("x86_32", getTriple().getArch() == llvm::Triple::x86)
       .Case("x86_64", getTriple().getArch() == llvm::Triple::x86_64)

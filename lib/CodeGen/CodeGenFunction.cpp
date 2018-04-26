@@ -466,12 +466,19 @@ bool CodeGenFunction::ShouldXRayInstrumentFunction() const {
 }
 
 /// AlwaysEmitXRayCustomEvents - Return true if we should emit IR for calls to
-/// the __xray_customevent(...) builin calls, when doing XRay instrumentation.
+/// the __xray_customevent(...) builtin calls, when doing XRay instrumentation.
 bool CodeGenFunction::AlwaysEmitXRayCustomEvents() const {
   return CGM.getCodeGenOpts().XRayInstrumentFunctions &&
          (CGM.getCodeGenOpts().XRayAlwaysEmitCustomEvents ||
           CGM.getCodeGenOpts().XRayInstrumentationBundle.Mask ==
               XRayInstrKind::Custom);
+}
+
+bool CodeGenFunction::AlwaysEmitXRayTypedEvents() const {
+  return CGM.getCodeGenOpts().XRayInstrumentFunctions &&
+         (CGM.getCodeGenOpts().XRayAlwaysEmitTypedEvents ||
+          CGM.getCodeGenOpts().XRayInstrumentationBundle.Mask ==
+              XRayInstrKind::Typed);
 }
 
 llvm::Constant *
@@ -1018,7 +1025,8 @@ void CodeGenFunction::StartFunction(GlobalDecl GD,
       ArgTypes.push_back(VD->getType());
     QualType FnType = getContext().getFunctionType(
         RetTy, ArgTypes, FunctionProtoType::ExtProtoInfo(CC));
-    DI->EmitFunctionStart(GD, Loc, StartLoc, FnType, CurFn, Builder);
+    DI->EmitFunctionStart(GD, Loc, StartLoc, FnType, CurFn, CurFuncIsThunk,
+                          Builder);
   }
 
   if (ShouldInstrumentFunction()) {
