@@ -1,17 +1,13 @@
 //===-- examples/clang-interpreter/main.cpp - Clang C Interpreter Example -===//
 //
-//                     The LLVM Compiler Infrastructure
-//
-// This file is distributed under the University of Illinois Open Source
-// License. See LICENSE.TXT for details.
+// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
 //===----------------------------------------------------------------------===//
 
-#include "Invoke.h"
-#include "Manager.h"
-
-#include "clang/CodeGen/CodeGenAction.h"
 #include "clang/Basic/DiagnosticOptions.h"
+#include "clang/CodeGen/CodeGenAction.h"
 #include "clang/Driver/Compilation.h"
 #include "clang/Driver/Driver.h"
 #include "clang/Driver/Tool.h"
@@ -21,7 +17,13 @@
 #include "clang/Frontend/TextDiagnosticPrinter.h"
 #include "llvm/ADT/SmallString.h"
 #include "llvm/ExecutionEngine/ExecutionEngine.h"
-#include "llvm/ExecutionEngine/MCJIT.h"
+#include "llvm/ExecutionEngine/Orc/CompileUtils.h"
+#include "llvm/ExecutionEngine/Orc/ExecutionUtils.h"
+#include "llvm/ExecutionEngine/Orc/IRCompileLayer.h"
+#include "llvm/ExecutionEngine/Orc/RTDyldObjectLinkingLayer.h"
+#include "llvm/ExecutionEngine/SectionMemoryManager.h"
+#include "llvm/IR/DataLayout.h"
+#include "llvm/IR/Mangler.h"
 #include "llvm/IR/Module.h"
 #include "llvm/Support/FileSystem.h"
 #include "llvm/Support/Host.h"
@@ -29,28 +31,10 @@
 #include "llvm/Support/Path.h"
 #include "llvm/Support/TargetSelect.h"
 #include "llvm/Support/raw_ostream.h"
+#include "llvm/Target/TargetMachine.h"
 
 using namespace clang;
 using namespace clang::driver;
-
-namespace interpreter {
-
-static llvm::ExecutionEngine *
-createExecutionEngine(std::unique_ptr<llvm::Module> M, std::string *ErrorStr) {
-  llvm::EngineBuilder EB(std::move(M));
-  EB.setErrorStr(ErrorStr);
-  EB.setMemoryManager(llvm::make_unique<SingleSectionMemoryManager>());
-  llvm::ExecutionEngine *EE = EB.create();
-  EE->finalizeObject();
-  return EE;
-}
-
-// Invoked from a try/catch block in invoke.cpp.
-//
-static int Invoke(llvm::ExecutionEngine *EE, llvm::Function *EntryFn,
-          const std::vector<std::string> &Args, char *const *EnvP) {
-  return EE->runFunctionAsMain(EntryFn, Args, EnvP);
-}
 
 // This function isn't referenced outside its translation unit, but it
 // can't use the "static" keyword because its address is used for
@@ -61,13 +45,81 @@ std::string GetExecutablePath(const char *Argv0, void *MainAddr) {
   return llvm::sys::fs::getMainExecutable(Argv0, MainAddr);
 }
 
-} // namespace interpreter
+namespace llvm {
+namespace orc {
 
-int main(int argc, const char **argv, char * const *envp) {
+class SimpleJIT {
+private:
+  ExecutionSession ES;
+  std::unique_ptr<TargetMachine> TM;
+  const DataLayout DL;
+  MangleAndInterner Mangle{ES, DL};
+  RTDyldObjectLinkingLayer ObjectLayer{ES, createMemMgr};
+  IRCompileLayer CompileLayer{ES, ObjectLayer, SimpleCompiler(*TM)};
+
+  static std::unique_ptr<SectionMemoryManager> createMemMgr() {
+    return std::make_unique<SectionMemoryManager>();
+  }
+
+  SimpleJIT(
+      std::unique_ptr<TargetMachine> TM, DataLayout DL,
+      std::unique_ptr<DynamicLibrarySearchGenerator> ProcessSymbolsGenerator)
+      : TM(std::move(TM)), DL(std::move(DL)) {
+    llvm::sys::DynamicLibrary::LoadLibraryPermanently(nullptr);
+    ES.getMainJITDylib().addGenerator(std::move(ProcessSymbolsGenerator));
+  }
+
+public:
+  static Expected<std::unique_ptr<SimpleJIT>> Create() {
+    auto JTMB = JITTargetMachineBuilder::detectHost();
+    if (!JTMB)
+      return JTMB.takeError();
+
+    auto TM = JTMB->createTargetMachine();
+    if (!TM)
+      return TM.takeError();
+
+    auto DL = (*TM)->createDataLayout();
+
+    auto ProcessSymbolsGenerator =
+        DynamicLibrarySearchGenerator::GetForCurrentProcess(
+            DL.getGlobalPrefix());
+
+    if (!ProcessSymbolsGenerator)
+      return ProcessSymbolsGenerator.takeError();
+
+    return std::unique_ptr<SimpleJIT>(new SimpleJIT(
+        std::move(*TM), std::move(DL), std::move(*ProcessSymbolsGenerator)));
+  }
+
+  const TargetMachine &getTargetMachine() const { return *TM; }
+
+  Error addModule(ThreadSafeModule M) {
+    return CompileLayer.add(ES.getMainJITDylib(), std::move(M));
+  }
+
+  Expected<JITEvaluatedSymbol> findSymbol(const StringRef &Name) {
+    return ES.lookup({&ES.getMainJITDylib()}, Mangle(Name));
+  }
+
+  Expected<JITTargetAddress> getSymbolAddress(const StringRef &Name) {
+    auto Sym = findSymbol(Name);
+    if (!Sym)
+      return Sym.takeError();
+    return Sym->getAddress();
+  }
+};
+
+} // end namespace orc
+} // end namespace llvm
+
+llvm::ExitOnError ExitOnErr;
+
+int main(int argc, const char **argv) {
   // This just needs to be some symbol in the binary; C++ doesn't
   // allow taking the address of ::main however.
-  void *MainAddr = (void*) (intptr_t) interpreter::GetExecutablePath;
-  std::string Path = interpreter::GetExecutablePath(argv[0], MainAddr);
+  void *MainAddr = (void*) (intptr_t) GetExecutablePath;
+  std::string Path = GetExecutablePath(argv[0], MainAddr);
   IntrusiveRefCntPtr<DiagnosticOptions> DiagOpts = new DiagnosticOptions();
   TextDiagnosticPrinter *DiagClient =
     new TextDiagnosticPrinter(llvm::errs(), &*DiagOpts);
@@ -83,7 +135,9 @@ int main(int argc, const char **argv, char * const *envp) {
   if (T.isOSBinFormatCOFF())
     T.setObjectFormat(llvm::Triple::ELF);
 #endif
-	
+
+  ExitOnErr.setBanner("clang interpreter");
+
   Driver TheDriver(Path, T.str(), Diags);
   TheDriver.setTitle("clang interpreter");
   TheDriver.setCheckInputsExist(false);
@@ -117,13 +171,9 @@ int main(int argc, const char **argv, char * const *envp) {
   }
 
   // Initialize a compiler invocation object from the clang (-cc1) arguments.
-  const driver::ArgStringList &CCArgs = Cmd.getArguments();
+  const llvm::opt::ArgStringList &CCArgs = Cmd.getArguments();
   std::unique_ptr<CompilerInvocation> CI(new CompilerInvocation);
-  CompilerInvocation::CreateFromArgs(*CI,
-                                     const_cast<const char **>(CCArgs.data()),
-                                     const_cast<const char **>(CCArgs.data()) +
-                                       CCArgs.size(),
-                                     Diags);
+  CompilerInvocation::CreateFromArgs(*CI, CCArgs, Diags);
 
   // Show the invocation, with -v.
   if (CI->getHeaderSearchOpts().Verbose) {
@@ -158,29 +208,16 @@ int main(int argc, const char **argv, char * const *envp) {
   llvm::InitializeNativeTargetAsmPrinter();
 
   int Res = 255;
-  if (std::unique_ptr<llvm::Module> Module = Act->takeModule()) {
-    llvm::Function *EntryFn = Module->getFunction("main");
-    if (!EntryFn) {
-      llvm::errs() << "'main' function not found in module.\n";
-      return Res;
-    }
+  std::unique_ptr<llvm::LLVMContext> Ctx(Act->takeLLVMContext());
+  std::unique_ptr<llvm::Module> Module = Act->takeModule();
 
-    std::string Error;
-    std::unique_ptr<llvm::ExecutionEngine> EE(
-        interpreter::createExecutionEngine(std::move(Module), &Error));
-    if (!EE) {
-      llvm::errs() << "unable to make execution engine: " << Error << "\n";
-      return Res;
-    }
+  if (Module) {
+    auto J = ExitOnErr(llvm::orc::SimpleJIT::Create());
 
-    interpreter::InvokeArgs Args;
-    for (int I = 1; I < argc; ++I)
-      Args.push_back(argv[I]);
-
-    if (Clang.getLangOpts().CPlusPlus)
-      Res = interpreter::TryIt(EE.get(), EntryFn, Args, envp, interpreter::Invoke);
-    else
-      Res = interpreter::Invoke(EE.get(), EntryFn, Args, envp);
+    ExitOnErr(J->addModule(
+        llvm::orc::ThreadSafeModule(std::move(Module), std::move(Ctx))));
+    auto Main = (int (*)(...))ExitOnErr(J->getSymbolAddress("main"));
+    Res = Main();
   }
 
   // Shutdown.

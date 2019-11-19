@@ -25,26 +25,40 @@ Usage:
     diff = compareResults(resultsA, resultsB)
 
 """
+from __future__ import division, print_function
 
-import sys
-import os
-import plistlib
+from collections import defaultdict
+
 from math import log
 from optparse import OptionParser
+import json
+import os
+import plistlib
+import re
+import sys
 
+STATS_REGEXP = re.compile(r"Statistics: (\{.+\})", re.MULTILINE | re.DOTALL)
+
+class Colors(object):
+    """
+    Color for terminal highlight.
+    """
+    RED = '\x1b[2;30;41m'
+    GREEN = '\x1b[6;30;42m'
+    CLEAR = '\x1b[0m'
 
 # Information about analysis run:
 # path - the analysis output directory
 # root - the name of the root directory, which will be disregarded when
 # determining the source file name
-class SingleRunInfo:
+class SingleRunInfo(object):
     def __init__(self, path, root="", verboseLog=None):
         self.path = path
         self.root = root.rstrip("/\\")
         self.verboseLog = verboseLog
 
 
-class AnalysisDiagnostic:
+class AnalysisDiagnostic(object):
     def __init__(self, data, report, htmlReport):
         self._data = data
         self._loc = self._data['location']
@@ -58,6 +72,21 @@ class AnalysisDiagnostic:
         if fileName.startswith(root) and len(root) > 0:
             return fileName[len(root) + 1:]
         return fileName
+
+    def getRootFileName(self):
+        path = self._data['path']
+        if not path:
+            return self.getFileName()
+        p = path[0]
+        if 'location' in p:
+            fIdx = p['location']['file']
+        else: # control edge
+            fIdx = path[0]['edges'][0]['start'][0]['file']
+        out = self._report.files[fIdx]
+        root = self._report.run.root
+        if out.startswith(root):
+            return out[len(root):]
+        return out
 
     def getLine(self):
         return self._loc['line']
@@ -92,7 +121,13 @@ class AnalysisDiagnostic:
             funcnamePostfix = "#" + self._data['issue_context']
         else:
             funcnamePostfix = ""
-        return '%s%s:%d:%d, %s: %s' % (self.getFileName(),
+        rootFilename = self.getRootFileName()
+        fileName = self.getFileName()
+        if rootFilename != fileName:
+            filePrefix = "[%s] %s" % (rootFilename, fileName)
+        else:
+            filePrefix = rootFilename
+        return '%s%s:%d:%d, %s: %s' % (filePrefix,
                                        funcnamePostfix,
                                        self.getLine(),
                                        self.getColumn(), self.getCategory(),
@@ -104,14 +139,14 @@ class AnalysisDiagnostic:
         return self._data
 
 
-class AnalysisReport:
+class AnalysisReport(object):
     def __init__(self, run, files):
         self.run = run
         self.files = files
         self.diagnostics = []
 
 
-class AnalysisRun:
+class AnalysisRun(object):
     def __init__(self, info):
         self.path = info.path
         self.root = info.root
@@ -120,12 +155,16 @@ class AnalysisRun:
         # Cumulative list of all diagnostics from all the reports.
         self.diagnostics = []
         self.clang_version = None
+        self.stats = []
 
     def getClangVersion(self):
         return self.clang_version
 
     def readSingleFile(self, p, deleteEmpty):
         data = plistlib.readPlist(p)
+        if 'statistics' in data:
+            self.stats.append(json.loads(data['statistics']))
+            data.pop('statistics')
 
         # We want to retrieve the clang version even if there are no
         # reports. Assume that all reports were created using the same
@@ -264,12 +303,67 @@ def compareResults(A, B, opts):
 
     return res
 
+def computePercentile(l, percentile):
+    """
+    Return computed percentile.
+    """
+    return sorted(l)[int(round(percentile * len(l) + 0.5)) - 1]
+
+def deriveStats(results):
+    # Assume all keys are the same in each statistics bucket.
+    combined_data = defaultdict(list)
+
+    # Collect data on paths length.
+    for report in results.reports:
+        for diagnostic in report.diagnostics:
+            combined_data['PathsLength'].append(diagnostic.getPathLength())
+
+    for stat in results.stats:
+        for key, value in stat.items():
+            combined_data[key].append(value)
+    combined_stats = {}
+    for key, values in combined_data.items():
+        combined_stats[str(key)] = {
+            "max": max(values),
+            "min": min(values),
+            "mean": sum(values) / len(values),
+            "90th %tile": computePercentile(values, 0.9),
+            "95th %tile": computePercentile(values, 0.95),
+            "median": sorted(values)[len(values) // 2],
+            "total": sum(values)
+        }
+    return combined_stats
+
+
+def compareStats(resultsA, resultsB):
+    statsA = deriveStats(resultsA)
+    statsB = deriveStats(resultsB)
+    keys = sorted(statsA.keys())
+    for key in keys:
+        print(key)
+        for kkey in statsA[key]:
+            valA = float(statsA[key][kkey])
+            valB = float(statsB[key][kkey])
+            report = "%.3f -> %.3f" % (valA, valB)
+            # Only apply highlighting when writing to TTY and it's not Windows
+            if sys.stdout.isatty() and os.name != 'nt':
+                if valB != 0:
+                    ratio = (valB - valA) / valB
+                    if ratio < -0.2:
+                        report = Colors.GREEN + report + Colors.CLEAR
+                    elif ratio > 0.2:
+                        report = Colors.RED + report + Colors.CLEAR
+            print("\t %s %s" % (kkey, report))
 
 def dumpScanBuildResultsDiff(dirA, dirB, opts, deleteEmpty=True,
                              Stdout=sys.stdout):
     # Load the run results.
     resultsA = loadResults(dirA, opts, opts.rootA, deleteEmpty)
     resultsB = loadResults(dirB, opts, opts.rootB, deleteEmpty)
+    if opts.show_stats:
+        compareStats(resultsA, resultsB)
+    if opts.stats_only:
+        return
 
     # Open the verbose log, if given.
     if opts.verboseLog:
@@ -339,6 +433,10 @@ def generate_option_parser():
                       default=False,
                       help="Show histogram of absolute paths differences. \
                             Requires matplotlib")
+    parser.add_option("--stats-only", action="store_true", dest="stats_only",
+                      default=False, help="Only show statistics on reports")
+    parser.add_option("--show-stats", action="store_true", dest="show_stats",
+                      default=False, help="Show change in statistics")
     return parser
 
 

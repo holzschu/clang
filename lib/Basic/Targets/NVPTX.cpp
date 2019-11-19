@@ -1,9 +1,8 @@
 //===--- NVPTX.cpp - Implement NVPTX target feature support ---------------===//
 //
-//                     The LLVM Compiler Infrastructure
-//
-// This file is distributed under the University of Illinois Open Source
-// License. See LICENSE.TXT for details.
+// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
 //===----------------------------------------------------------------------===//
 //
@@ -45,6 +44,8 @@ NVPTXTargetInfo::NVPTXTargetInfo(const llvm::Triple &Triple,
     if (!Feature.startswith("+ptx"))
       continue;
     PTXVersion = llvm::StringSwitch<unsigned>(Feature)
+                     .Case("+ptx64", 64)
+                     .Case("+ptx63", 63)
                      .Case("+ptx61", 61)
                      .Case("+ptx60", 60)
                      .Case("+ptx50", 50)
@@ -68,6 +69,9 @@ NVPTXTargetInfo::NVPTXTargetInfo(const llvm::Triple &Triple,
 
   if (TargetPointerWidth == 32)
     resetDataLayout("e-p:32:32-i64:64-i128:128-v16:16-v32:32-n16:32:64");
+  else if (Opts.NVPTXUseShortPointers)
+    resetDataLayout(
+        "e-p3:32:32-p4:32:32-p5:32:32-i64:64-i128:128-v16:16-v32:32-n16:32:64");
   else
     resetDataLayout("e-i64:64-i128:128-v16:16-v32:32-n16:32:64");
 
@@ -115,7 +119,7 @@ NVPTXTargetInfo::NVPTXTargetInfo(const llvm::Triple &Triple,
   LongAlign = HostTarget->getLongAlign();
   LongLongWidth = HostTarget->getLongLongWidth();
   LongLongAlign = HostTarget->getLongLongAlign();
-  MinGlobalAlign = HostTarget->getMinGlobalAlign();
+  MinGlobalAlign = HostTarget->getMinGlobalAlign(/* TypeSize = */ 0);
   NewAlign = HostTarget->getNewAlign();
   DefaultAlignForAttributeAligned =
       HostTarget->getDefaultAlignForAttributeAligned();
@@ -185,6 +189,13 @@ void NVPTXTargetInfo::getTargetDefines(const LangOptions &Opts,
       case CudaArch::GFX810:
       case CudaArch::GFX900:
       case CudaArch::GFX902:
+      case CudaArch::GFX904:
+      case CudaArch::GFX906:
+      case CudaArch::GFX908:
+      case CudaArch::GFX909:
+      case CudaArch::GFX1010:
+      case CudaArch::GFX1011:
+      case CudaArch::GFX1012:
       case CudaArch::LAST:
         break;
       case CudaArch::UNKNOWN:
@@ -218,6 +229,8 @@ void NVPTXTargetInfo::getTargetDefines(const LangOptions &Opts,
         return "700";
       case CudaArch::SM_72:
         return "720";
+      case CudaArch::SM_75:
+        return "750";
       }
       llvm_unreachable("unhandled CudaArch");
     }();

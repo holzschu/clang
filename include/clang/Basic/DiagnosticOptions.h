@@ -1,9 +1,8 @@
 //===- DiagnosticOptions.h --------------------------------------*- C++ -*-===//
 //
-//                     The LLVM Compiler Infrastructure
-//
-// This file is distributed under the University of Illinois Open Source
-// License. See LICENSE.TXT for details.
+// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
 //===----------------------------------------------------------------------===//
 
@@ -18,7 +17,7 @@
 
 namespace clang {
 
-/// \brief Specifies which overload candidates to display when overload
+/// Specifies which overload candidates to display when overload
 /// resolution fails.
 enum OverloadsShown : unsigned {
   /// Show all overloads.
@@ -28,7 +27,7 @@ enum OverloadsShown : unsigned {
   Ovl_Best
 };
 
-/// \brief A bitmask representing the diagnostic levels used by
+/// A bitmask representing the diagnostic levels used by
 /// VerifyDiagnosticConsumer.
 enum class DiagnosticLevelMask : unsigned {
   None    = 0,
@@ -60,7 +59,7 @@ inline DiagnosticLevelMask operator&(DiagnosticLevelMask LHS,
 
 raw_ostream& operator<<(raw_ostream& Out, DiagnosticLevelMask M);
 
-/// \brief Options for controlling the compiler diagnostics engine.
+/// Options for controlling the compiler diagnostics engine.
 class DiagnosticOptions : public RefCountedBase<DiagnosticOptions>{
 public:
   enum TextDiagnosticFormat { Clang, MSVC, Vi };
@@ -89,10 +88,10 @@ protected:
 #include "clang/Basic/DiagnosticOptions.def"
 
 public:
-  /// \brief The file to log diagnostic output to.
+  /// The file to log diagnostic output to.
   std::string DiagnosticLogFile;
-  
-  /// \brief The file to serialize diagnostics to (non-appending).
+
+  /// The file to serialize diagnostics to (non-appending).
   std::string DiagnosticSerializationFile;
 
   /// The list of -W... options used to alter the diagnostic mappings, with the

@@ -1,5 +1,7 @@
 // RUN: %clang_cc1 -triple thumbv7s-apple-darwin -target-abi apcs-gnu\
-// RUN:  -target-cpu swift -fallow-half-arguments-and-returns -ffreestanding \
+// RUN:  -target-cpu swift -fallow-half-arguments-and-returns \
+// RUN:  -target-feature +fullfp16 -ffreestanding \
+// RUN:  -flax-vector-conversions=none \
 // RUN:  -disable-O0-optnone -emit-llvm -o - %s \
 // RUN:  | opt -S -mem2reg | FileCheck %s
 
@@ -2183,8 +2185,8 @@ float32x2_t test_vcreate_f32(uint64_t a) {
 // CHECK:   [[TMP0:%.*]] = bitcast i64 %a to <8 x i8>
 // CHECK:   [[VCLZ_V_I:%.*]] = call <8 x i8> @llvm.ctlz.v8i8(<8 x i8> [[TMP0]], i1 false)
 // CHECK:   ret <8 x i8> [[VCLZ_V_I]]
-uint8x8_t test_vcreate_u8(uint64_t a) {
-  return vclz_s8(vcreate_u8(a));
+int8x8_t test_vcreate_u8(uint64_t a) {
+  return vclz_s8((int8x8_t)vcreate_u8(a));
 }
 
 // CHECK-LABEL: @test_vcreate_u16(
@@ -2193,8 +2195,8 @@ uint8x8_t test_vcreate_u8(uint64_t a) {
 // CHECK:   [[VCLZ_V1_I:%.*]] = call <4 x i16> @llvm.ctlz.v4i16(<4 x i16> [[TMP0]], i1 false)
 // CHECK:   [[VCLZ_V2_I:%.*]] = bitcast <4 x i16> [[VCLZ_V1_I]] to <8 x i8>
 // CHECK:   ret <4 x i16> [[VCLZ_V1_I]]
-uint16x4_t test_vcreate_u16(uint64_t a) {
-  return vclz_s16(vcreate_u16(a));
+int16x4_t test_vcreate_u16(uint64_t a) {
+  return vclz_s16((int16x4_t)vcreate_u16(a));
 }
 
 // CHECK-LABEL: @test_vcreate_u32(
@@ -2203,8 +2205,8 @@ uint16x4_t test_vcreate_u16(uint64_t a) {
 // CHECK:   [[VCLZ_V1_I:%.*]] = call <2 x i32> @llvm.ctlz.v2i32(<2 x i32> [[TMP0]], i1 false)
 // CHECK:   [[VCLZ_V2_I:%.*]] = bitcast <2 x i32> [[VCLZ_V1_I]] to <8 x i8>
 // CHECK:   ret <2 x i32> [[VCLZ_V1_I]]
-uint32x2_t test_vcreate_u32(uint64_t a) {
-  return vclz_s32(vcreate_u32(a));
+int32x2_t test_vcreate_u32(uint64_t a) {
+  return vclz_s32((int32x2_t)vcreate_u32(a));
 }
 
 // CHECK-LABEL: @test_vcreate_u64(
@@ -2234,7 +2236,7 @@ poly8x8_t test_vcreate_p8(uint64_t a) {
 // CHECK:   ret <4 x i16> [[TMP4]]
 poly16x4_t test_vcreate_p16(uint64_t a) {
   poly16x4_t tmp = vcreate_p16(a);
-  return vbsl_p16(tmp, tmp, tmp);
+  return vbsl_p16((uint16x4_t)tmp, tmp, tmp);
 }
 
 // CHECK-LABEL: @test_vcreate_s64(
@@ -2829,8 +2831,8 @@ int64x1_t test_vdup_n_s64(int64_t a) {
 // CHECK:   [[VECINIT_I:%.*]] = insertelement <1 x i64> undef, i64 %a, i32 0
 // CHECK:   [[ADD_I:%.*]] = add <1 x i64> [[VECINIT_I]], [[VECINIT_I]]
 // CHECK:   ret <1 x i64> [[ADD_I]]
-uint64x1_t test_vdup_n_u64(uint64_t a) {
-  int64x1_t tmp = vdup_n_u64(a);
+int64x1_t test_vdup_n_u64(uint64_t a) {
+  int64x1_t tmp = (int64x1_t)vdup_n_u64(a);
   return vadd_s64(tmp, tmp);
 }
 
@@ -2850,7 +2852,7 @@ int64x2_t test_vdupq_n_s64(int64_t a) {
 // CHECK:   [[ADD_I:%.*]] = add <2 x i64> [[VECINIT1_I]], [[VECINIT1_I]]
 // CHECK:   ret <2 x i64> [[ADD_I]]
 uint64x2_t test_vdupq_n_u64(uint64_t a) {
-  int64x2_t tmp = vdupq_n_u64(a);
+  uint64x2_t tmp = vdupq_n_u64(a);
   return vaddq_u64(tmp, tmp);
 }
 
@@ -3205,7 +3207,7 @@ float32x4_t test_vfmaq_f32(float32x4_t a, float32x4_t b, float32x4_t c) {
 }
 
 // CHECK-LABEL: @test_vfms_f32(
-// CHECK:   [[SUB_I:%.*]] = fsub <2 x float> <float -0.000000e+00, float -0.000000e+00>, %b
+// CHECK:   [[SUB_I:%.*]] = fneg <2 x float> %b
 // CHECK:   [[TMP0:%.*]] = bitcast <2 x float> %a to <8 x i8>
 // CHECK:   [[TMP1:%.*]] = bitcast <2 x float> [[SUB_I]] to <8 x i8>
 // CHECK:   [[TMP2:%.*]] = bitcast <2 x float> %c to <8 x i8>
@@ -3216,7 +3218,7 @@ float32x2_t test_vfms_f32(float32x2_t a, float32x2_t b, float32x2_t c) {
 }
 
 // CHECK-LABEL: @test_vfmsq_f32(
-// CHECK:   [[SUB_I:%.*]] = fsub <4 x float> <float -0.000000e+00, float -0.000000e+00, float -0.000000e+00, float -0.000000e+00>, %b
+// CHECK:   [[SUB_I:%.*]] = fneg <4 x float> %b
 // CHECK:   [[TMP0:%.*]] = bitcast <4 x float> %a to <16 x i8>
 // CHECK:   [[TMP1:%.*]] = bitcast <4 x float> [[SUB_I]] to <16 x i8>
 // CHECK:   [[TMP2:%.*]] = bitcast <4 x float> %c to <16 x i8>
@@ -3318,18 +3320,14 @@ uint8_t test_vget_lane_u8(uint8x8_t a) {
 }
 
 // CHECK-LABEL: @test_vget_lane_u16(
-// CHECK:   [[TMP0:%.*]] = bitcast <4 x i16> %a to <8 x i8>
-// CHECK:   [[TMP1:%.*]] = bitcast <8 x i8> [[TMP0]] to <4 x i16>
-// CHECK:   [[VGET_LANE:%.*]] = extractelement <4 x i16> [[TMP1]], i32 3
+// CHECK:   [[VGET_LANE:%.*]] = extractelement <4 x i16> %a, i32 3
 // CHECK:   ret i16 [[VGET_LANE]]
 uint16_t test_vget_lane_u16(uint16x4_t a) {
   return vget_lane_u16(a, 3);
 }
 
 // CHECK-LABEL: @test_vget_lane_u32(
-// CHECK:   [[TMP0:%.*]] = bitcast <2 x i32> %a to <8 x i8>
-// CHECK:   [[TMP1:%.*]] = bitcast <8 x i8> [[TMP0]] to <2 x i32>
-// CHECK:   [[VGET_LANE:%.*]] = extractelement <2 x i32> [[TMP1]], i32 1
+// CHECK:   [[VGET_LANE:%.*]] = extractelement <2 x i32> %a, i32 1
 // CHECK:   ret i32 [[VGET_LANE]]
 uint32_t test_vget_lane_u32(uint32x2_t a) {
   return vget_lane_u32(a, 1);
@@ -3343,18 +3341,14 @@ int8_t test_vget_lane_s8(int8x8_t a) {
 }
 
 // CHECK-LABEL: @test_vget_lane_s16(
-// CHECK:   [[TMP0:%.*]] = bitcast <4 x i16> %a to <8 x i8>
-// CHECK:   [[TMP1:%.*]] = bitcast <8 x i8> [[TMP0]] to <4 x i16>
-// CHECK:   [[VGET_LANE:%.*]] = extractelement <4 x i16> [[TMP1]], i32 3
+// CHECK:   [[VGET_LANE:%.*]] = extractelement <4 x i16> %a, i32 3
 // CHECK:   ret i16 [[VGET_LANE]]
 int16_t test_vget_lane_s16(int16x4_t a) {
   return vget_lane_s16(a, 3);
 }
 
 // CHECK-LABEL: @test_vget_lane_s32(
-// CHECK:   [[TMP0:%.*]] = bitcast <2 x i32> %a to <8 x i8>
-// CHECK:   [[TMP1:%.*]] = bitcast <8 x i8> [[TMP0]] to <2 x i32>
-// CHECK:   [[VGET_LANE:%.*]] = extractelement <2 x i32> [[TMP1]], i32 1
+// CHECK:   [[VGET_LANE:%.*]] = extractelement <2 x i32> %a, i32 1
 // CHECK:   ret i32 [[VGET_LANE]]
 int32_t test_vget_lane_s32(int32x2_t a) {
   return vget_lane_s32(a, 1);
@@ -3368,18 +3362,14 @@ poly8_t test_vget_lane_p8(poly8x8_t a) {
 }
 
 // CHECK-LABEL: @test_vget_lane_p16(
-// CHECK:   [[TMP0:%.*]] = bitcast <4 x i16> %a to <8 x i8>
-// CHECK:   [[TMP1:%.*]] = bitcast <8 x i8> [[TMP0]] to <4 x i16>
-// CHECK:   [[VGET_LANE:%.*]] = extractelement <4 x i16> [[TMP1]], i32 3
+// CHECK:   [[VGET_LANE:%.*]] = extractelement <4 x i16> %a, i32 3
 // CHECK:   ret i16 [[VGET_LANE]]
 poly16_t test_vget_lane_p16(poly16x4_t a) {
   return vget_lane_p16(a, 3);
 }
 
 // CHECK-LABEL: @test_vget_lane_f32(
-// CHECK:   [[TMP0:%.*]] = bitcast <2 x float> %a to <8 x i8>
-// CHECK:   [[TMP1:%.*]] = bitcast <8 x i8> [[TMP0]] to <2 x float>
-// CHECK:   [[VGET_LANE:%.*]] = extractelement <2 x float> [[TMP1]], i32 1
+// CHECK:   [[VGET_LANE:%.*]] = extractelement <2 x float> %a, i32 1
 // CHECK:   ret float [[VGET_LANE]]
 float32_t test_vget_lane_f32(float32x2_t a) {
   return vget_lane_f32(a, 1);
@@ -3391,9 +3381,7 @@ float32_t test_vget_lane_f32(float32x2_t a) {
 // CHECK:   store <4 x half> %a, <4 x half>* [[__REINT_242]], align 8
 // CHECK:   [[TMP0:%.*]] = bitcast <4 x half>* [[__REINT_242]] to <4 x i16>*
 // CHECK:   [[TMP1:%.*]] = load <4 x i16>, <4 x i16>* [[TMP0]], align 8
-// CHECK:   [[TMP2:%.*]] = bitcast <4 x i16> [[TMP1]] to <8 x i8>
-// CHECK:   [[TMP3:%.*]] = bitcast <8 x i8> [[TMP2]] to <4 x i16>
-// CHECK:   [[VGET_LANE:%.*]] = extractelement <4 x i16> [[TMP3]], i32 1
+// CHECK:   [[VGET_LANE:%.*]] = extractelement <4 x i16> [[TMP1]], i32 1
 // CHECK:   store i16 [[VGET_LANE]], i16* [[__REINT1_242]], align 2
 // CHECK:   [[TMP4:%.*]] = bitcast i16* [[__REINT1_242]] to half*
 // CHECK:   [[TMP5:%.*]] = load half, half* [[TMP4]], align 2
@@ -3411,18 +3399,14 @@ uint8_t test_vgetq_lane_u8(uint8x16_t a) {
 }
 
 // CHECK-LABEL: @test_vgetq_lane_u16(
-// CHECK:   [[TMP0:%.*]] = bitcast <8 x i16> %a to <16 x i8>
-// CHECK:   [[TMP1:%.*]] = bitcast <16 x i8> [[TMP0]] to <8 x i16>
-// CHECK:   [[VGET_LANE:%.*]] = extractelement <8 x i16> [[TMP1]], i32 7
+// CHECK:   [[VGET_LANE:%.*]] = extractelement <8 x i16> %a, i32 7
 // CHECK:   ret i16 [[VGET_LANE]]
 uint16_t test_vgetq_lane_u16(uint16x8_t a) {
   return vgetq_lane_u16(a, 7);
 }
 
 // CHECK-LABEL: @test_vgetq_lane_u32(
-// CHECK:   [[TMP0:%.*]] = bitcast <4 x i32> %a to <16 x i8>
-// CHECK:   [[TMP1:%.*]] = bitcast <16 x i8> [[TMP0]] to <4 x i32>
-// CHECK:   [[VGET_LANE:%.*]] = extractelement <4 x i32> [[TMP1]], i32 3
+// CHECK:   [[VGET_LANE:%.*]] = extractelement <4 x i32> %a, i32 3
 // CHECK:   ret i32 [[VGET_LANE]]
 uint32_t test_vgetq_lane_u32(uint32x4_t a) {
   return vgetq_lane_u32(a, 3);
@@ -3436,18 +3420,14 @@ int8_t test_vgetq_lane_s8(int8x16_t a) {
 }
 
 // CHECK-LABEL: @test_vgetq_lane_s16(
-// CHECK:   [[TMP0:%.*]] = bitcast <8 x i16> %a to <16 x i8>
-// CHECK:   [[TMP1:%.*]] = bitcast <16 x i8> [[TMP0]] to <8 x i16>
-// CHECK:   [[VGET_LANE:%.*]] = extractelement <8 x i16> [[TMP1]], i32 7
+// CHECK:   [[VGET_LANE:%.*]] = extractelement <8 x i16> %a, i32 7
 // CHECK:   ret i16 [[VGET_LANE]]
 int16_t test_vgetq_lane_s16(int16x8_t a) {
   return vgetq_lane_s16(a, 7);
 }
 
 // CHECK-LABEL: @test_vgetq_lane_s32(
-// CHECK:   [[TMP0:%.*]] = bitcast <4 x i32> %a to <16 x i8>
-// CHECK:   [[TMP1:%.*]] = bitcast <16 x i8> [[TMP0]] to <4 x i32>
-// CHECK:   [[VGET_LANE:%.*]] = extractelement <4 x i32> [[TMP1]], i32 3
+// CHECK:   [[VGET_LANE:%.*]] = extractelement <4 x i32> %a, i32 3
 // CHECK:   ret i32 [[VGET_LANE]]
 int32_t test_vgetq_lane_s32(int32x4_t a) {
   return vgetq_lane_s32(a, 3);
@@ -3461,18 +3441,14 @@ poly8_t test_vgetq_lane_p8(poly8x16_t a) {
 }
 
 // CHECK-LABEL: @test_vgetq_lane_p16(
-// CHECK:   [[TMP0:%.*]] = bitcast <8 x i16> %a to <16 x i8>
-// CHECK:   [[TMP1:%.*]] = bitcast <16 x i8> [[TMP0]] to <8 x i16>
-// CHECK:   [[VGET_LANE:%.*]] = extractelement <8 x i16> [[TMP1]], i32 7
+// CHECK:   [[VGET_LANE:%.*]] = extractelement <8 x i16> %a, i32 7
 // CHECK:   ret i16 [[VGET_LANE]]
 poly16_t test_vgetq_lane_p16(poly16x8_t a) {
   return vgetq_lane_p16(a, 7);
 }
 
 // CHECK-LABEL: @test_vgetq_lane_f32(
-// CHECK:   [[TMP0:%.*]] = bitcast <4 x float> %a to <16 x i8>
-// CHECK:   [[TMP1:%.*]] = bitcast <16 x i8> [[TMP0]] to <4 x float>
-// CHECK:   [[VGET_LANE:%.*]] = extractelement <4 x float> [[TMP1]], i32 3
+// CHECK:   [[VGET_LANE:%.*]] = extractelement <4 x float> %a, i32 3
 // CHECK:   ret float [[VGET_LANE]]
 float32_t test_vgetq_lane_f32(float32x4_t a) {
   return vgetq_lane_f32(a, 3);
@@ -3484,9 +3460,7 @@ float32_t test_vgetq_lane_f32(float32x4_t a) {
 // CHECK:   store <8 x half> %a, <8 x half>* [[__REINT_244]], align 16
 // CHECK:   [[TMP0:%.*]] = bitcast <8 x half>* [[__REINT_244]] to <8 x i16>*
 // CHECK:   [[TMP1:%.*]] = load <8 x i16>, <8 x i16>* [[TMP0]], align 16
-// CHECK:   [[TMP2:%.*]] = bitcast <8 x i16> [[TMP1]] to <16 x i8>
-// CHECK:   [[TMP3:%.*]] = bitcast <16 x i8> [[TMP2]] to <8 x i16>
-// CHECK:   [[VGET_LANE:%.*]] = extractelement <8 x i16> [[TMP3]], i32 3
+// CHECK:   [[VGET_LANE:%.*]] = extractelement <8 x i16> [[TMP1]], i32 3
 // CHECK:   store i16 [[VGET_LANE]], i16* [[__REINT1_244]], align 2
 // CHECK:   [[TMP4:%.*]] = bitcast i16* [[__REINT1_244]] to half*
 // CHECK:   [[TMP5:%.*]] = load half, half* [[TMP4]], align 2
@@ -3497,36 +3471,28 @@ float32_t test_vgetq_lane_f16(float16x8_t a) {
 }
 
 // CHECK-LABEL: @test_vget_lane_s64(
-// CHECK:   [[TMP0:%.*]] = bitcast <1 x i64> %a to <8 x i8>
-// CHECK:   [[TMP1:%.*]] = bitcast <8 x i8> [[TMP0]] to <1 x i64>
-// CHECK:   [[VGET_LANE:%.*]] = extractelement <1 x i64> [[TMP1]], i32 0
+// CHECK:   [[VGET_LANE:%.*]] = extractelement <1 x i64> %a, i32 0
 // CHECK:   ret i64 [[VGET_LANE]]
 int64_t test_vget_lane_s64(int64x1_t a) {
   return vget_lane_s64(a, 0);
 }
 
 // CHECK-LABEL: @test_vget_lane_u64(
-// CHECK:   [[TMP0:%.*]] = bitcast <1 x i64> %a to <8 x i8>
-// CHECK:   [[TMP1:%.*]] = bitcast <8 x i8> [[TMP0]] to <1 x i64>
-// CHECK:   [[VGET_LANE:%.*]] = extractelement <1 x i64> [[TMP1]], i32 0
+// CHECK:   [[VGET_LANE:%.*]] = extractelement <1 x i64> %a, i32 0
 // CHECK:   ret i64 [[VGET_LANE]]
 uint64_t test_vget_lane_u64(uint64x1_t a) {
   return vget_lane_u64(a, 0);
 }
 
 // CHECK-LABEL: @test_vgetq_lane_s64(
-// CHECK:   [[TMP0:%.*]] = bitcast <2 x i64> %a to <16 x i8>
-// CHECK:   [[TMP1:%.*]] = bitcast <16 x i8> [[TMP0]] to <2 x i64>
-// CHECK:   [[VGET_LANE:%.*]] = extractelement <2 x i64> [[TMP1]], i32 1
+// CHECK:   [[VGET_LANE:%.*]] = extractelement <2 x i64> %a, i32 1
 // CHECK:   ret i64 [[VGET_LANE]]
 int64_t test_vgetq_lane_s64(int64x2_t a) {
   return vgetq_lane_s64(a, 1);
 }
 
 // CHECK-LABEL: @test_vgetq_lane_u64(
-// CHECK:   [[TMP0:%.*]] = bitcast <2 x i64> %a to <16 x i8>
-// CHECK:   [[TMP1:%.*]] = bitcast <16 x i8> [[TMP0]] to <2 x i64>
-// CHECK:   [[VGET_LANE:%.*]] = extractelement <2 x i64> [[TMP1]], i32 1
+// CHECK:   [[VGET_LANE:%.*]] = extractelement <2 x i64> %a, i32 1
 // CHECK:   ret i64 [[VGET_LANE]]
 uint64_t test_vgetq_lane_u64(uint64x2_t a) {
   return vgetq_lane_u64(a, 1);
@@ -3896,9 +3862,8 @@ int64x2_t test_vld1q_s64(int64_t const * a) {
 
 // CHECK-LABEL: @test_vld1q_f16(
 // CHECK:   [[TMP0:%.*]] = bitcast half* %a to i8*
-// CHECK:   [[VLD1:%.*]] = call <8 x i16> @llvm.arm.neon.vld1.v8i16.p0i8(i8* [[TMP0]], i32 2)
-// CHECK:   [[TMP1:%.*]] = bitcast <8 x i16> [[VLD1]] to <8 x half>
-// CHECK:   ret <8 x half> [[TMP1]]
+// CHECK:   [[VLD1:%.*]] = call <8 x half> @llvm.arm.neon.vld1.v8f16.p0i8(i8* [[TMP0]], i32 2)
+// CHECK:   ret <8 x half> [[VLD1]]
 float16x8_t test_vld1q_f16(float16_t const * a) {
   return vld1q_f16(a);
 }
@@ -3990,9 +3955,8 @@ int64x1_t test_vld1_s64(int64_t const * a) {
 
 // CHECK-LABEL: @test_vld1_f16(
 // CHECK:   [[TMP0:%.*]] = bitcast half* %a to i8*
-// CHECK:   [[VLD1:%.*]] = call <4 x i16> @llvm.arm.neon.vld1.v4i16.p0i8(i8* [[TMP0]], i32 2)
-// CHECK:   [[TMP1:%.*]] = bitcast <4 x i16> [[VLD1]] to <4 x half>
-// CHECK:   ret <4 x half> [[TMP1]]
+// CHECK:   [[VLD1:%.*]] = call <4 x half> @llvm.arm.neon.vld1.v4f16.p0i8(i8* [[TMP0]], i32 2)
+// CHECK:   ret <4 x half> [[VLD1]]
 float16x4_t test_vld1_f16(float16_t const * a) {
   return vld1_f16(a);
 }
@@ -4106,12 +4070,11 @@ int64x2_t test_vld1q_dup_s64(int64_t const * a) {
 
 // CHECK-LABEL: @test_vld1q_dup_f16(
 // CHECK:   [[TMP0:%.*]] = bitcast half* %a to i8*
-// CHECK:   [[TMP1:%.*]] = bitcast i8* [[TMP0]] to i16*
-// CHECK:   [[TMP2:%.*]] = load i16, i16* [[TMP1]], align 2
-// CHECK:   [[TMP3:%.*]] = insertelement <8 x i16> undef, i16 [[TMP2]], i32 0
-// CHECK:   [[LANE:%.*]] = shufflevector <8 x i16> [[TMP3]], <8 x i16> [[TMP3]], <8 x i32> zeroinitializer
-// CHECK:   [[TMP4:%.*]] = bitcast <8 x i16> [[LANE]] to <8 x half>
-// CHECK:   ret <8 x half> [[TMP4]]
+// CHECK:   [[TMP1:%.*]] = bitcast i8* [[TMP0]] to half*
+// CHECK:   [[TMP2:%.*]] = load half, half* [[TMP1]], align 2
+// CHECK:   [[TMP3:%.*]] = insertelement <8 x half> undef, half [[TMP2]], i32 0
+// CHECK:   [[LANE:%.*]] = shufflevector <8 x half> [[TMP3]], <8 x half> [[TMP3]], <8 x i32> zeroinitializer
+// CHECK:   ret <8 x half> [[LANE]]
 float16x8_t test_vld1q_dup_f16(float16_t const * a) {
   return vld1q_dup_f16(a);
 }
@@ -4233,12 +4196,11 @@ int64x1_t test_vld1_dup_s64(int64_t const * a) {
 
 // CHECK-LABEL: @test_vld1_dup_f16(
 // CHECK:   [[TMP0:%.*]] = bitcast half* %a to i8*
-// CHECK:   [[TMP1:%.*]] = bitcast i8* [[TMP0]] to i16*
-// CHECK:   [[TMP2:%.*]] = load i16, i16* [[TMP1]], align 2
-// CHECK:   [[TMP3:%.*]] = insertelement <4 x i16> undef, i16 [[TMP2]], i32 0
-// CHECK:   [[LANE:%.*]] = shufflevector <4 x i16> [[TMP3]], <4 x i16> [[TMP3]], <4 x i32> zeroinitializer
-// CHECK:   [[TMP4:%.*]] = bitcast <4 x i16> [[LANE]] to <4 x half>
-// CHECK:   ret <4 x half> [[TMP4]]
+// CHECK:   [[TMP1:%.*]] = bitcast i8* [[TMP0]] to half*
+// CHECK:   [[TMP2:%.*]] = load half, half* [[TMP1]], align 2
+// CHECK:   [[TMP3:%.*]] = insertelement <4 x half> undef, half [[TMP2]], i32 0
+// CHECK:   [[LANE:%.*]] = shufflevector <4 x half> [[TMP3]], <4 x half> [[TMP3]], <4 x i32> zeroinitializer
+// CHECK:   ret <4 x half> [[LANE]]
 float16x4_t test_vld1_dup_f16(float16_t const * a) {
   return vld1_dup_f16(a);
 }
@@ -4365,12 +4327,11 @@ int64x2_t test_vld1q_lane_s64(int64_t const * a, int64x2_t b) {
 // CHECK-LABEL: @test_vld1q_lane_f16(
 // CHECK:   [[TMP0:%.*]] = bitcast half* %a to i8*
 // CHECK:   [[TMP1:%.*]] = bitcast <8 x half> %b to <16 x i8>
-// CHECK:   [[TMP2:%.*]] = bitcast <16 x i8> [[TMP1]] to <8 x i16>
-// CHECK:   [[TMP3:%.*]] = bitcast i8* [[TMP0]] to i16*
-// CHECK:   [[TMP4:%.*]] = load i16, i16* [[TMP3]], align 2
-// CHECK:   [[VLD1_LANE:%.*]] = insertelement <8 x i16> [[TMP2]], i16 [[TMP4]], i32 7
-// CHECK:   [[TMP5:%.*]] = bitcast <8 x i16> [[VLD1_LANE]] to <8 x half>
-// CHECK:   ret <8 x half> [[TMP5]]
+// CHECK:   [[TMP2:%.*]] = bitcast <16 x i8> [[TMP1]] to <8 x half>
+// CHECK:   [[TMP3:%.*]] = bitcast i8* [[TMP0]] to half*
+// CHECK:   [[TMP4:%.*]] = load half, half* [[TMP3]], align 2
+// CHECK:   [[VLD1_LANE:%.*]] = insertelement <8 x half> [[TMP2]], half [[TMP4]], i32 7
+// CHECK:   ret <8 x half> [[VLD1_LANE]]
 float16x8_t test_vld1q_lane_f16(float16_t const * a, float16x8_t b) {
   return vld1q_lane_f16(a, b, 7);
 }
@@ -4498,12 +4459,11 @@ int64x1_t test_vld1_lane_s64(int64_t const * a, int64x1_t b) {
 // CHECK-LABEL: @test_vld1_lane_f16(
 // CHECK:   [[TMP0:%.*]] = bitcast half* %a to i8*
 // CHECK:   [[TMP1:%.*]] = bitcast <4 x half> %b to <8 x i8>
-// CHECK:   [[TMP2:%.*]] = bitcast <8 x i8> [[TMP1]] to <4 x i16>
-// CHECK:   [[TMP3:%.*]] = bitcast i8* [[TMP0]] to i16*
-// CHECK:   [[TMP4:%.*]] = load i16, i16* [[TMP3]], align 2
-// CHECK:   [[VLD1_LANE:%.*]] = insertelement <4 x i16> [[TMP2]], i16 [[TMP4]], i32 3
-// CHECK:   [[TMP5:%.*]] = bitcast <4 x i16> [[VLD1_LANE]] to <4 x half>
-// CHECK:   ret <4 x half> [[TMP5]]
+// CHECK:   [[TMP2:%.*]] = bitcast <8 x i8> [[TMP1]] to <4 x half>
+// CHECK:   [[TMP3:%.*]] = bitcast i8* [[TMP0]] to half*
+// CHECK:   [[TMP4:%.*]] = load half, half* [[TMP3]], align 2
+// CHECK:   [[VLD1_LANE:%.*]] = insertelement <4 x half> [[TMP2]], half [[TMP4]], i32 3
+// CHECK:   ret <4 x half> [[VLD1_LANE]]
 float16x4_t test_vld1_lane_f16(float16_t const * a, float16x4_t b) {
   return vld1_lane_f16(a, b, 3);
 }
@@ -4596,7 +4556,7 @@ int32x4x2_t test_vld2q_s32(int32_t const * a) {
 // CHECK:   [[__RET:%.*]] = alloca %struct.float16x8x2_t, align 16
 // CHECK:   [[TMP0:%.*]] = bitcast %struct.float16x8x2_t* [[__RET]] to i8*
 // CHECK:   [[TMP1:%.*]] = bitcast half* %a to i8*
-// CHECK:   [[VLD2Q_V:%.*]] = call { <8 x i16>, <8 x i16>
+// CHECK:   [[VLD2Q_V:%.*]] = call { <8 x half>, <8 x half>
 float16x8x2_t test_vld2q_f16(float16_t const * a) {
   return vld2q_f16(a);
 }
@@ -4701,7 +4661,7 @@ int64x1x2_t test_vld2_s64(int64_t const * a) {
 // CHECK:   [[__RET:%.*]] = alloca %struct.float16x4x2_t, align 8
 // CHECK:   [[TMP0:%.*]] = bitcast %struct.float16x4x2_t* [[__RET]] to i8*
 // CHECK:   [[TMP1:%.*]] = bitcast half* %a to i8*
-// CHECK:   [[VLD2_V:%.*]] = call { <4 x i16>, <4 x i16>
+// CHECK:   [[VLD2_V:%.*]] = call { <4 x half>, <4 x half>
 float16x4x2_t test_vld2_f16(float16_t const * a) {
   return vld2_f16(a);
 }
@@ -4730,111 +4690,6 @@ poly8x8x2_t test_vld2_p8(poly8_t const * a) {
 // CHECK:   [[VLD2_V:%.*]] = call { <4 x i16>, <4 x i16>
 poly16x4x2_t test_vld2_p16(poly16_t const * a) {
   return vld2_p16(a);
-}
-
-// CHECK-LABEL: @test_vld2_dup_u8(
-// CHECK:   [[__RET:%.*]] = alloca %struct.uint8x8x2_t, align 8
-// CHECK:   [[TMP0:%.*]] = bitcast %struct.uint8x8x2_t* [[__RET]] to i8*
-// CHECK:   [[VLD_DUP:%.*]] = call { <8 x i8>, <8 x i8>
-uint8x8x2_t test_vld2_dup_u8(uint8_t const * a) {
-  return vld2_dup_u8(a);
-}
-
-// CHECK-LABEL: @test_vld2_dup_u16(
-// CHECK:   [[__RET:%.*]] = alloca %struct.uint16x4x2_t, align 8
-// CHECK:   [[TMP0:%.*]] = bitcast %struct.uint16x4x2_t* [[__RET]] to i8*
-// CHECK:   [[TMP1:%.*]] = bitcast i16* %a to i8*
-// CHECK:   [[VLD_DUP:%.*]] = call { <4 x i16>, <4 x i16>
-uint16x4x2_t test_vld2_dup_u16(uint16_t const * a) {
-  return vld2_dup_u16(a);
-}
-
-// CHECK-LABEL: @test_vld2_dup_u32(
-// CHECK:   [[__RET:%.*]] = alloca %struct.uint32x2x2_t, align 8
-// CHECK:   [[TMP0:%.*]] = bitcast %struct.uint32x2x2_t* [[__RET]] to i8*
-// CHECK:   [[TMP1:%.*]] = bitcast i32* %a to i8*
-// CHECK:   [[VLD_DUP:%.*]] = call { <2 x i32>, <2 x i32>
-uint32x2x2_t test_vld2_dup_u32(uint32_t const * a) {
-  return vld2_dup_u32(a);
-}
-
-// CHECK-LABEL: @test_vld2_dup_u64(
-// CHECK:   [[__RET:%.*]] = alloca %struct.uint64x1x2_t, align 8
-// CHECK:   [[TMP0:%.*]] = bitcast %struct.uint64x1x2_t* [[__RET]] to i8*
-// CHECK:   [[TMP1:%.*]] = bitcast i64* %a to i8*
-// CHECK:   [[VLD_DUP:%.*]] = call { <1 x i64>, <1 x i64>
-uint64x1x2_t test_vld2_dup_u64(uint64_t const * a) {
-  return vld2_dup_u64(a);
-}
-
-// CHECK-LABEL: @test_vld2_dup_s8(
-// CHECK:   [[__RET:%.*]] = alloca %struct.int8x8x2_t, align 8
-// CHECK:   [[TMP0:%.*]] = bitcast %struct.int8x8x2_t* [[__RET]] to i8*
-// CHECK:   [[VLD_DUP:%.*]] = call { <8 x i8>, <8 x i8>
-int8x8x2_t test_vld2_dup_s8(int8_t const * a) {
-  return vld2_dup_s8(a);
-}
-
-// CHECK-LABEL: @test_vld2_dup_s16(
-// CHECK:   [[__RET:%.*]] = alloca %struct.int16x4x2_t, align 8
-// CHECK:   [[TMP0:%.*]] = bitcast %struct.int16x4x2_t* [[__RET]] to i8*
-// CHECK:   [[TMP1:%.*]] = bitcast i16* %a to i8*
-// CHECK:   [[VLD_DUP:%.*]] = call { <4 x i16>, <4 x i16>
-int16x4x2_t test_vld2_dup_s16(int16_t const * a) {
-  return vld2_dup_s16(a);
-}
-
-// CHECK-LABEL: @test_vld2_dup_s32(
-// CHECK:   [[__RET:%.*]] = alloca %struct.int32x2x2_t, align 8
-// CHECK:   [[TMP0:%.*]] = bitcast %struct.int32x2x2_t* [[__RET]] to i8*
-// CHECK:   [[TMP1:%.*]] = bitcast i32* %a to i8*
-// CHECK:   [[VLD_DUP:%.*]] = call { <2 x i32>, <2 x i32>
-int32x2x2_t test_vld2_dup_s32(int32_t const * a) {
-  return vld2_dup_s32(a);
-}
-
-// CHECK-LABEL: @test_vld2_dup_s64(
-// CHECK:   [[__RET:%.*]] = alloca %struct.int64x1x2_t, align 8
-// CHECK:   [[TMP0:%.*]] = bitcast %struct.int64x1x2_t* [[__RET]] to i8*
-// CHECK:   [[TMP1:%.*]] = bitcast i64* %a to i8*
-// CHECK:   [[VLD_DUP:%.*]] = call { <1 x i64>, <1 x i64>
-int64x1x2_t test_vld2_dup_s64(int64_t const * a) {
-  return vld2_dup_s64(a);
-}
-
-// CHECK-LABEL: @test_vld2_dup_f16(
-// CHECK:   [[__RET:%.*]] = alloca %struct.float16x4x2_t, align 8
-// CHECK:   [[TMP0:%.*]] = bitcast %struct.float16x4x2_t* [[__RET]] to i8*
-// CHECK:   [[TMP1:%.*]] = bitcast half* %a to i8*
-// CHECK:   [[VLD_DUP:%.*]] = call { <4 x i16>, <4 x i16>
-float16x4x2_t test_vld2_dup_f16(float16_t const * a) {
-  return vld2_dup_f16(a);
-}
-
-// CHECK-LABEL: @test_vld2_dup_f32(
-// CHECK:   [[__RET:%.*]] = alloca %struct.float32x2x2_t, align 8
-// CHECK:   [[TMP0:%.*]] = bitcast %struct.float32x2x2_t* [[__RET]] to i8*
-// CHECK:   [[TMP1:%.*]] = bitcast float* %a to i8*
-// CHECK:   [[VLD_DUP:%.*]] = call { <2 x float>, <2 x float>
-float32x2x2_t test_vld2_dup_f32(float32_t const * a) {
-  return vld2_dup_f32(a);
-}
-
-// CHECK-LABEL: @test_vld2_dup_p8(
-// CHECK:   [[__RET:%.*]] = alloca %struct.poly8x8x2_t, align 8
-// CHECK:   [[TMP0:%.*]] = bitcast %struct.poly8x8x2_t* [[__RET]] to i8*
-// CHECK:   [[VLD_DUP:%.*]] = call { <8 x i8>, <8 x i8>
-poly8x8x2_t test_vld2_dup_p8(poly8_t const * a) {
-  return vld2_dup_p8(a);
-}
-
-// CHECK-LABEL: @test_vld2_dup_p16(
-// CHECK:   [[__RET:%.*]] = alloca %struct.poly16x4x2_t, align 8
-// CHECK:   [[TMP0:%.*]] = bitcast %struct.poly16x4x2_t* [[__RET]] to i8*
-// CHECK:   [[TMP1:%.*]] = bitcast i16* %a to i8*
-// CHECK:   [[VLD_DUP:%.*]] = call { <4 x i16>, <4 x i16>
-poly16x4x2_t test_vld2_dup_p16(poly16_t const * a) {
-  return vld2_dup_p16(a);
 }
 
 // CHECK-LABEL: @test_vld2q_lane_u16(
@@ -4965,9 +4820,9 @@ int32x4x2_t test_vld2q_lane_s32(int32_t const * a, int32x4x2_t b) {
 // CHECK:   [[ARRAYIDX2:%.*]] = getelementptr inbounds [2 x <8 x half>], [2 x <8 x half>]* [[VAL1]], i32 0, i32 1
 // CHECK:   [[TMP7:%.*]] = load <8 x half>, <8 x half>* [[ARRAYIDX2]], align 16
 // CHECK:   [[TMP8:%.*]] = bitcast <8 x half> [[TMP7]] to <16 x i8>
-// CHECK:   [[TMP9:%.*]] = bitcast <16 x i8> [[TMP6]] to <8 x i16>
-// CHECK:   [[TMP10:%.*]] = bitcast <16 x i8> [[TMP8]] to <8 x i16>
-// CHECK:   [[VLD2Q_LANE_V:%.*]] = call { <8 x i16>, <8 x i16>
+// CHECK:   [[TMP9:%.*]] = bitcast <16 x i8> [[TMP6]] to <8 x half>
+// CHECK:   [[TMP10:%.*]] = bitcast <16 x i8> [[TMP8]] to <8 x half>
+// CHECK:   [[VLD2Q_LANE_V:%.*]] = call { <8 x half>, <8 x half>
 float16x8x2_t test_vld2q_lane_f16(float16_t const * a, float16x8x2_t b) {
   return vld2q_lane_f16(a, b, 7);
 }
@@ -5198,9 +5053,9 @@ int32x2x2_t test_vld2_lane_s32(int32_t const * a, int32x2x2_t b) {
 // CHECK:   [[ARRAYIDX2:%.*]] = getelementptr inbounds [2 x <4 x half>], [2 x <4 x half>]* [[VAL1]], i32 0, i32 1
 // CHECK:   [[TMP7:%.*]] = load <4 x half>, <4 x half>* [[ARRAYIDX2]], align 8
 // CHECK:   [[TMP8:%.*]] = bitcast <4 x half> [[TMP7]] to <8 x i8>
-// CHECK:   [[TMP9:%.*]] = bitcast <8 x i8> [[TMP6]] to <4 x i16>
-// CHECK:   [[TMP10:%.*]] = bitcast <8 x i8> [[TMP8]] to <4 x i16>
-// CHECK:   [[VLD2_LANE_V:%.*]] = call { <4 x i16>, <4 x i16>
+// CHECK:   [[TMP9:%.*]] = bitcast <8 x i8> [[TMP6]] to <4 x half>
+// CHECK:   [[TMP10:%.*]] = bitcast <8 x i8> [[TMP8]] to <4 x half>
+// CHECK:   [[VLD2_LANE_V:%.*]] = call { <4 x half>, <4 x half>
 float16x4x2_t test_vld2_lane_f16(float16_t const * a, float16x4x2_t b) {
   return vld2_lane_f16(a, b, 3);
 }
@@ -5337,7 +5192,7 @@ int32x4x3_t test_vld3q_s32(int32_t const * a) {
 // CHECK:   [[__RET:%.*]] = alloca %struct.float16x8x3_t, align 16
 // CHECK:   [[TMP0:%.*]] = bitcast %struct.float16x8x3_t* [[__RET]] to i8*
 // CHECK:   [[TMP1:%.*]] = bitcast half* %a to i8*
-// CHECK:   [[VLD3Q_V:%.*]] = call { <8 x i16>, <8 x i16>, <8 x i16>
+// CHECK:   [[VLD3Q_V:%.*]] = call { <8 x half>, <8 x half>, <8 x half>
 float16x8x3_t test_vld3q_f16(float16_t const * a) {
   return vld3q_f16(a);
 }
@@ -5442,7 +5297,7 @@ int64x1x3_t test_vld3_s64(int64_t const * a) {
 // CHECK:   [[__RET:%.*]] = alloca %struct.float16x4x3_t, align 8
 // CHECK:   [[TMP0:%.*]] = bitcast %struct.float16x4x3_t* [[__RET]] to i8*
 // CHECK:   [[TMP1:%.*]] = bitcast half* %a to i8*
-// CHECK:   [[VLD3_V:%.*]] = call { <4 x i16>, <4 x i16>, <4 x i16>
+// CHECK:   [[VLD3_V:%.*]] = call { <4 x half>, <4 x half>, <4 x half>
 float16x4x3_t test_vld3_f16(float16_t const * a) {
   return vld3_f16(a);
 }
@@ -5471,111 +5326,6 @@ poly8x8x3_t test_vld3_p8(poly8_t const * a) {
 // CHECK:   [[VLD3_V:%.*]] = call { <4 x i16>, <4 x i16>, <4 x i16>
 poly16x4x3_t test_vld3_p16(poly16_t const * a) {
   return vld3_p16(a);
-}
-
-// CHECK-LABEL: @test_vld3_dup_u8(
-// CHECK:   [[__RET:%.*]] = alloca %struct.uint8x8x3_t, align 8
-// CHECK:   [[TMP0:%.*]] = bitcast %struct.uint8x8x3_t* [[__RET]] to i8*
-// CHECK:   [[VLD_DUP:%.*]] = call { <8 x i8>, <8 x i8>, <8 x i8>
-uint8x8x3_t test_vld3_dup_u8(uint8_t const * a) {
-  return vld3_dup_u8(a);
-}
-
-// CHECK-LABEL: @test_vld3_dup_u16(
-// CHECK:   [[__RET:%.*]] = alloca %struct.uint16x4x3_t, align 8
-// CHECK:   [[TMP0:%.*]] = bitcast %struct.uint16x4x3_t* [[__RET]] to i8*
-// CHECK:   [[TMP1:%.*]] = bitcast i16* %a to i8*
-// CHECK:   [[VLD_DUP:%.*]] = call { <4 x i16>, <4 x i16>, <4 x i16>
-uint16x4x3_t test_vld3_dup_u16(uint16_t const * a) {
-  return vld3_dup_u16(a);
-}
-
-// CHECK-LABEL: @test_vld3_dup_u32(
-// CHECK:   [[__RET:%.*]] = alloca %struct.uint32x2x3_t, align 8
-// CHECK:   [[TMP0:%.*]] = bitcast %struct.uint32x2x3_t* [[__RET]] to i8*
-// CHECK:   [[TMP1:%.*]] = bitcast i32* %a to i8*
-// CHECK:   [[VLD_DUP:%.*]] = call { <2 x i32>, <2 x i32>, <2 x i32>
-uint32x2x3_t test_vld3_dup_u32(uint32_t const * a) {
-  return vld3_dup_u32(a);
-}
-
-// CHECK-LABEL: @test_vld3_dup_u64(
-// CHECK:   [[__RET:%.*]] = alloca %struct.uint64x1x3_t, align 8
-// CHECK:   [[TMP0:%.*]] = bitcast %struct.uint64x1x3_t* [[__RET]] to i8*
-// CHECK:   [[TMP1:%.*]] = bitcast i64* %a to i8*
-// CHECK:   [[VLD_DUP:%.*]] = call { <1 x i64>, <1 x i64>, <1 x i64>
-uint64x1x3_t test_vld3_dup_u64(uint64_t const * a) {
-  return vld3_dup_u64(a);
-}
-
-// CHECK-LABEL: @test_vld3_dup_s8(
-// CHECK:   [[__RET:%.*]] = alloca %struct.int8x8x3_t, align 8
-// CHECK:   [[TMP0:%.*]] = bitcast %struct.int8x8x3_t* [[__RET]] to i8*
-// CHECK:   [[VLD_DUP:%.*]] = call { <8 x i8>, <8 x i8>, <8 x i8>
-int8x8x3_t test_vld3_dup_s8(int8_t const * a) {
-  return vld3_dup_s8(a);
-}
-
-// CHECK-LABEL: @test_vld3_dup_s16(
-// CHECK:   [[__RET:%.*]] = alloca %struct.int16x4x3_t, align 8
-// CHECK:   [[TMP0:%.*]] = bitcast %struct.int16x4x3_t* [[__RET]] to i8*
-// CHECK:   [[TMP1:%.*]] = bitcast i16* %a to i8*
-// CHECK:   [[VLD_DUP:%.*]] = call { <4 x i16>, <4 x i16>, <4 x i16>
-int16x4x3_t test_vld3_dup_s16(int16_t const * a) {
-  return vld3_dup_s16(a);
-}
-
-// CHECK-LABEL: @test_vld3_dup_s32(
-// CHECK:   [[__RET:%.*]] = alloca %struct.int32x2x3_t, align 8
-// CHECK:   [[TMP0:%.*]] = bitcast %struct.int32x2x3_t* [[__RET]] to i8*
-// CHECK:   [[TMP1:%.*]] = bitcast i32* %a to i8*
-// CHECK:   [[VLD_DUP:%.*]] = call { <2 x i32>, <2 x i32>, <2 x i32>
-int32x2x3_t test_vld3_dup_s32(int32_t const * a) {
-  return vld3_dup_s32(a);
-}
-
-// CHECK-LABEL: @test_vld3_dup_s64(
-// CHECK:   [[__RET:%.*]] = alloca %struct.int64x1x3_t, align 8
-// CHECK:   [[TMP0:%.*]] = bitcast %struct.int64x1x3_t* [[__RET]] to i8*
-// CHECK:   [[TMP1:%.*]] = bitcast i64* %a to i8*
-// CHECK:   [[VLD_DUP:%.*]] = call { <1 x i64>, <1 x i64>, <1 x i64>
-int64x1x3_t test_vld3_dup_s64(int64_t const * a) {
-  return vld3_dup_s64(a);
-}
-
-// CHECK-LABEL: @test_vld3_dup_f16(
-// CHECK:   [[__RET:%.*]] = alloca %struct.float16x4x3_t, align 8
-// CHECK:   [[TMP0:%.*]] = bitcast %struct.float16x4x3_t* [[__RET]] to i8*
-// CHECK:   [[TMP1:%.*]] = bitcast half* %a to i8*
-// CHECK:   [[VLD_DUP:%.*]] = call { <4 x i16>, <4 x i16>, <4 x i16>
-float16x4x3_t test_vld3_dup_f16(float16_t const * a) {
-  return vld3_dup_f16(a);
-}
-
-// CHECK-LABEL: @test_vld3_dup_f32(
-// CHECK:   [[__RET:%.*]] = alloca %struct.float32x2x3_t, align 8
-// CHECK:   [[TMP0:%.*]] = bitcast %struct.float32x2x3_t* [[__RET]] to i8*
-// CHECK:   [[TMP1:%.*]] = bitcast float* %a to i8*
-// CHECK:   [[VLD_DUP:%.*]] = call { <2 x float>, <2 x float>, <2 x float>
-float32x2x3_t test_vld3_dup_f32(float32_t const * a) {
-  return vld3_dup_f32(a);
-}
-
-// CHECK-LABEL: @test_vld3_dup_p8(
-// CHECK:   [[__RET:%.*]] = alloca %struct.poly8x8x3_t, align 8
-// CHECK:   [[TMP0:%.*]] = bitcast %struct.poly8x8x3_t* [[__RET]] to i8*
-// CHECK:   [[VLD_DUP:%.*]] = call { <8 x i8>, <8 x i8>, <8 x i8>
-poly8x8x3_t test_vld3_dup_p8(poly8_t const * a) {
-  return vld3_dup_p8(a);
-}
-
-// CHECK-LABEL: @test_vld3_dup_p16(
-// CHECK:   [[__RET:%.*]] = alloca %struct.poly16x4x3_t, align 8
-// CHECK:   [[TMP0:%.*]] = bitcast %struct.poly16x4x3_t* [[__RET]] to i8*
-// CHECK:   [[TMP1:%.*]] = bitcast i16* %a to i8*
-// CHECK:   [[VLD_DUP:%.*]] = call { <4 x i16>, <4 x i16>, <4 x i16>
-poly16x4x3_t test_vld3_dup_p16(poly16_t const * a) {
-  return vld3_dup_p16(a);
 }
 
 // CHECK-LABEL: @test_vld3q_lane_u16(
@@ -5730,10 +5480,10 @@ int32x4x3_t test_vld3q_lane_s32(int32_t const * a, int32x4x3_t b) {
 // CHECK:   [[ARRAYIDX4:%.*]] = getelementptr inbounds [3 x <8 x half>], [3 x <8 x half>]* [[VAL3]], i32 0, i32 2
 // CHECK:   [[TMP9:%.*]] = load <8 x half>, <8 x half>* [[ARRAYIDX4]], align 16
 // CHECK:   [[TMP10:%.*]] = bitcast <8 x half> [[TMP9]] to <16 x i8>
-// CHECK:   [[TMP11:%.*]] = bitcast <16 x i8> [[TMP6]] to <8 x i16>
-// CHECK:   [[TMP12:%.*]] = bitcast <16 x i8> [[TMP8]] to <8 x i16>
-// CHECK:   [[TMP13:%.*]] = bitcast <16 x i8> [[TMP10]] to <8 x i16>
-// CHECK:   [[VLD3Q_LANE_V:%.*]] = call { <8 x i16>, <8 x i16>, <8 x i16>
+// CHECK:   [[TMP11:%.*]] = bitcast <16 x i8> [[TMP6]] to <8 x half>
+// CHECK:   [[TMP12:%.*]] = bitcast <16 x i8> [[TMP8]] to <8 x half>
+// CHECK:   [[TMP13:%.*]] = bitcast <16 x i8> [[TMP10]] to <8 x half>
+// CHECK:   [[VLD3Q_LANE_V:%.*]] = call { <8 x half>, <8 x half>, <8 x half>
 float16x8x3_t test_vld3q_lane_f16(float16_t const * a, float16x8x3_t b) {
   return vld3q_lane_f16(a, b, 7);
 }
@@ -6004,10 +5754,10 @@ int32x2x3_t test_vld3_lane_s32(int32_t const * a, int32x2x3_t b) {
 // CHECK:   [[ARRAYIDX4:%.*]] = getelementptr inbounds [3 x <4 x half>], [3 x <4 x half>]* [[VAL3]], i32 0, i32 2
 // CHECK:   [[TMP9:%.*]] = load <4 x half>, <4 x half>* [[ARRAYIDX4]], align 8
 // CHECK:   [[TMP10:%.*]] = bitcast <4 x half> [[TMP9]] to <8 x i8>
-// CHECK:   [[TMP11:%.*]] = bitcast <8 x i8> [[TMP6]] to <4 x i16>
-// CHECK:   [[TMP12:%.*]] = bitcast <8 x i8> [[TMP8]] to <4 x i16>
-// CHECK:   [[TMP13:%.*]] = bitcast <8 x i8> [[TMP10]] to <4 x i16>
-// CHECK:   [[VLD3_LANE_V:%.*]] = call { <4 x i16>, <4 x i16>, <4 x i16>
+// CHECK:   [[TMP11:%.*]] = bitcast <8 x i8> [[TMP6]] to <4 x half>
+// CHECK:   [[TMP12:%.*]] = bitcast <8 x i8> [[TMP8]] to <4 x half>
+// CHECK:   [[TMP13:%.*]] = bitcast <8 x i8> [[TMP10]] to <4 x half>
+// CHECK:   [[VLD3_LANE_V:%.*]] = call { <4 x half>, <4 x half>, <4 x half>
 float16x4x3_t test_vld3_lane_f16(float16_t const * a, float16x4x3_t b) {
   return vld3_lane_f16(a, b, 3);
 }
@@ -6157,7 +5907,7 @@ int32x4x4_t test_vld4q_s32(int32_t const * a) {
 // CHECK:   [[__RET:%.*]] = alloca %struct.float16x8x4_t, align 16
 // CHECK:   [[TMP0:%.*]] = bitcast %struct.float16x8x4_t* [[__RET]] to i8*
 // CHECK:   [[TMP1:%.*]] = bitcast half* %a to i8*
-// CHECK:   [[VLD4Q_V:%.*]] = call { <8 x i16>, <8 x i16>, <8 x i16>, <8 x i16>
+// CHECK:   [[VLD4Q_V:%.*]] = call { <8 x half>, <8 x half>, <8 x half>, <8 x half>
 float16x8x4_t test_vld4q_f16(float16_t const * a) {
   return vld4q_f16(a);
 }
@@ -6262,7 +6012,7 @@ int64x1x4_t test_vld4_s64(int64_t const * a) {
 // CHECK:   [[__RET:%.*]] = alloca %struct.float16x4x4_t, align 8
 // CHECK:   [[TMP0:%.*]] = bitcast %struct.float16x4x4_t* [[__RET]] to i8*
 // CHECK:   [[TMP1:%.*]] = bitcast half* %a to i8*
-// CHECK:   [[VLD4_V:%.*]] = call { <4 x i16>, <4 x i16>, <4 x i16>, <4 x i16>
+// CHECK:   [[VLD4_V:%.*]] = call { <4 x half>, <4 x half>, <4 x half>, <4 x half>
 float16x4x4_t test_vld4_f16(float16_t const * a) {
   return vld4_f16(a);
 }
@@ -6291,111 +6041,6 @@ poly8x8x4_t test_vld4_p8(poly8_t const * a) {
 // CHECK:   [[VLD4_V:%.*]] = call { <4 x i16>, <4 x i16>, <4 x i16>, <4 x i16>
 poly16x4x4_t test_vld4_p16(poly16_t const * a) {
   return vld4_p16(a);
-}
-
-// CHECK-LABEL: @test_vld4_dup_u8(
-// CHECK:   [[__RET:%.*]] = alloca %struct.uint8x8x4_t, align 8
-// CHECK:   [[TMP0:%.*]] = bitcast %struct.uint8x8x4_t* [[__RET]] to i8*
-// CHECK:   [[VLD_DUP:%.*]] = call { <8 x i8>, <8 x i8>, <8 x i8>, <8 x i8>
-uint8x8x4_t test_vld4_dup_u8(uint8_t const * a) {
-  return vld4_dup_u8(a);
-}
-
-// CHECK-LABEL: @test_vld4_dup_u16(
-// CHECK:   [[__RET:%.*]] = alloca %struct.uint16x4x4_t, align 8
-// CHECK:   [[TMP0:%.*]] = bitcast %struct.uint16x4x4_t* [[__RET]] to i8*
-// CHECK:   [[TMP1:%.*]] = bitcast i16* %a to i8*
-// CHECK:   [[VLD_DUP:%.*]] = call { <4 x i16>, <4 x i16>, <4 x i16>, <4 x i16>
-uint16x4x4_t test_vld4_dup_u16(uint16_t const * a) {
-  return vld4_dup_u16(a);
-}
-
-// CHECK-LABEL: @test_vld4_dup_u32(
-// CHECK:   [[__RET:%.*]] = alloca %struct.uint32x2x4_t, align 8
-// CHECK:   [[TMP0:%.*]] = bitcast %struct.uint32x2x4_t* [[__RET]] to i8*
-// CHECK:   [[TMP1:%.*]] = bitcast i32* %a to i8*
-// CHECK:   [[VLD_DUP:%.*]] = call { <2 x i32>, <2 x i32>, <2 x i32>, <2 x i32>
-uint32x2x4_t test_vld4_dup_u32(uint32_t const * a) {
-  return vld4_dup_u32(a);
-}
-
-// CHECK-LABEL: @test_vld4_dup_u64(
-// CHECK:   [[__RET:%.*]] = alloca %struct.uint64x1x4_t, align 8
-// CHECK:   [[TMP0:%.*]] = bitcast %struct.uint64x1x4_t* [[__RET]] to i8*
-// CHECK:   [[TMP1:%.*]] = bitcast i64* %a to i8*
-// CHECK:   [[VLD_DUP:%.*]] = call { <1 x i64>, <1 x i64>, <1 x i64>, <1 x i64>
-uint64x1x4_t test_vld4_dup_u64(uint64_t const * a) {
-  return vld4_dup_u64(a);
-}
-
-// CHECK-LABEL: @test_vld4_dup_s8(
-// CHECK:   [[__RET:%.*]] = alloca %struct.int8x8x4_t, align 8
-// CHECK:   [[TMP0:%.*]] = bitcast %struct.int8x8x4_t* [[__RET]] to i8*
-// CHECK:   [[VLD_DUP:%.*]] = call { <8 x i8>, <8 x i8>, <8 x i8>, <8 x i8>
-int8x8x4_t test_vld4_dup_s8(int8_t const * a) {
-  return vld4_dup_s8(a);
-}
-
-// CHECK-LABEL: @test_vld4_dup_s16(
-// CHECK:   [[__RET:%.*]] = alloca %struct.int16x4x4_t, align 8
-// CHECK:   [[TMP0:%.*]] = bitcast %struct.int16x4x4_t* [[__RET]] to i8*
-// CHECK:   [[TMP1:%.*]] = bitcast i16* %a to i8*
-// CHECK:   [[VLD_DUP:%.*]] = call { <4 x i16>, <4 x i16>, <4 x i16>, <4 x i16>
-int16x4x4_t test_vld4_dup_s16(int16_t const * a) {
-  return vld4_dup_s16(a);
-}
-
-// CHECK-LABEL: @test_vld4_dup_s32(
-// CHECK:   [[__RET:%.*]] = alloca %struct.int32x2x4_t, align 8
-// CHECK:   [[TMP0:%.*]] = bitcast %struct.int32x2x4_t* [[__RET]] to i8*
-// CHECK:   [[TMP1:%.*]] = bitcast i32* %a to i8*
-// CHECK:   [[VLD_DUP:%.*]] = call { <2 x i32>, <2 x i32>, <2 x i32>, <2 x i32>
-int32x2x4_t test_vld4_dup_s32(int32_t const * a) {
-  return vld4_dup_s32(a);
-}
-
-// CHECK-LABEL: @test_vld4_dup_s64(
-// CHECK:   [[__RET:%.*]] = alloca %struct.int64x1x4_t, align 8
-// CHECK:   [[TMP0:%.*]] = bitcast %struct.int64x1x4_t* [[__RET]] to i8*
-// CHECK:   [[TMP1:%.*]] = bitcast i64* %a to i8*
-// CHECK:   [[VLD_DUP:%.*]] = call { <1 x i64>, <1 x i64>, <1 x i64>, <1 x i64>
-int64x1x4_t test_vld4_dup_s64(int64_t const * a) {
-  return vld4_dup_s64(a);
-}
-
-// CHECK-LABEL: @test_vld4_dup_f16(
-// CHECK:   [[__RET:%.*]] = alloca %struct.float16x4x4_t, align 8
-// CHECK:   [[TMP0:%.*]] = bitcast %struct.float16x4x4_t* [[__RET]] to i8*
-// CHECK:   [[TMP1:%.*]] = bitcast half* %a to i8*
-// CHECK:   [[VLD_DUP:%.*]] = call { <4 x i16>, <4 x i16>, <4 x i16>, <4 x i16>
-float16x4x4_t test_vld4_dup_f16(float16_t const * a) {
-  return vld4_dup_f16(a);
-}
-
-// CHECK-LABEL: @test_vld4_dup_f32(
-// CHECK:   [[__RET:%.*]] = alloca %struct.float32x2x4_t, align 8
-// CHECK:   [[TMP0:%.*]] = bitcast %struct.float32x2x4_t* [[__RET]] to i8*
-// CHECK:   [[TMP1:%.*]] = bitcast float* %a to i8*
-// CHECK:   [[VLD_DUP:%.*]] = call { <2 x float>, <2 x float>, <2 x float>, <2 x float>
-float32x2x4_t test_vld4_dup_f32(float32_t const * a) {
-  return vld4_dup_f32(a);
-}
-
-// CHECK-LABEL: @test_vld4_dup_p8(
-// CHECK:   [[__RET:%.*]] = alloca %struct.poly8x8x4_t, align 8
-// CHECK:   [[TMP0:%.*]] = bitcast %struct.poly8x8x4_t* [[__RET]] to i8*
-// CHECK:   [[VLD_DUP:%.*]] = call { <8 x i8>, <8 x i8>, <8 x i8>, <8 x i8>
-poly8x8x4_t test_vld4_dup_p8(poly8_t const * a) {
-  return vld4_dup_p8(a);
-}
-
-// CHECK-LABEL: @test_vld4_dup_p16(
-// CHECK:   [[__RET:%.*]] = alloca %struct.poly16x4x4_t, align 8
-// CHECK:   [[TMP0:%.*]] = bitcast %struct.poly16x4x4_t* [[__RET]] to i8*
-// CHECK:   [[TMP1:%.*]] = bitcast i16* %a to i8*
-// CHECK:   [[VLD_DUP:%.*]] = call { <4 x i16>, <4 x i16>, <4 x i16>, <4 x i16>
-poly16x4x4_t test_vld4_dup_p16(poly16_t const * a) {
-  return vld4_dup_p16(a);
 }
 
 // CHECK-LABEL: @test_vld4q_lane_u16(
@@ -6574,11 +6219,11 @@ int32x4x4_t test_vld4q_lane_s32(int32_t const * a, int32x4x4_t b) {
 // CHECK:   [[ARRAYIDX6:%.*]] = getelementptr inbounds [4 x <8 x half>], [4 x <8 x half>]* [[VAL5]], i32 0, i32 3
 // CHECK:   [[TMP11:%.*]] = load <8 x half>, <8 x half>* [[ARRAYIDX6]], align 16
 // CHECK:   [[TMP12:%.*]] = bitcast <8 x half> [[TMP11]] to <16 x i8>
-// CHECK:   [[TMP13:%.*]] = bitcast <16 x i8> [[TMP6]] to <8 x i16>
-// CHECK:   [[TMP14:%.*]] = bitcast <16 x i8> [[TMP8]] to <8 x i16>
-// CHECK:   [[TMP15:%.*]] = bitcast <16 x i8> [[TMP10]] to <8 x i16>
-// CHECK:   [[TMP16:%.*]] = bitcast <16 x i8> [[TMP12]] to <8 x i16>
-// CHECK:   [[VLD4Q_LANE_V:%.*]] = call { <8 x i16>, <8 x i16>, <8 x i16>, <8 x i16>
+// CHECK:   [[TMP13:%.*]] = bitcast <16 x i8> [[TMP6]] to <8 x half>
+// CHECK:   [[TMP14:%.*]] = bitcast <16 x i8> [[TMP8]] to <8 x half>
+// CHECK:   [[TMP15:%.*]] = bitcast <16 x i8> [[TMP10]] to <8 x half>
+// CHECK:   [[TMP16:%.*]] = bitcast <16 x i8> [[TMP12]] to <8 x half>
+// CHECK:   [[VLD4Q_LANE_V:%.*]] = call { <8 x half>, <8 x half>, <8 x half>, <8 x half>
 float16x8x4_t test_vld4q_lane_f16(float16_t const * a, float16x8x4_t b) {
   return vld4q_lane_f16(a, b, 7);
 }
@@ -6889,11 +6534,11 @@ int32x2x4_t test_vld4_lane_s32(int32_t const * a, int32x2x4_t b) {
 // CHECK:   [[ARRAYIDX6:%.*]] = getelementptr inbounds [4 x <4 x half>], [4 x <4 x half>]* [[VAL5]], i32 0, i32 3
 // CHECK:   [[TMP11:%.*]] = load <4 x half>, <4 x half>* [[ARRAYIDX6]], align 8
 // CHECK:   [[TMP12:%.*]] = bitcast <4 x half> [[TMP11]] to <8 x i8>
-// CHECK:   [[TMP13:%.*]] = bitcast <8 x i8> [[TMP6]] to <4 x i16>
-// CHECK:   [[TMP14:%.*]] = bitcast <8 x i8> [[TMP8]] to <4 x i16>
-// CHECK:   [[TMP15:%.*]] = bitcast <8 x i8> [[TMP10]] to <4 x i16>
-// CHECK:   [[TMP16:%.*]] = bitcast <8 x i8> [[TMP12]] to <4 x i16>
-// CHECK:   [[VLD4_LANE_V:%.*]] = call { <4 x i16>, <4 x i16>, <4 x i16>, <4 x i16>
+// CHECK:   [[TMP13:%.*]] = bitcast <8 x i8> [[TMP6]] to <4 x half>
+// CHECK:   [[TMP14:%.*]] = bitcast <8 x i8> [[TMP8]] to <4 x half>
+// CHECK:   [[TMP15:%.*]] = bitcast <8 x i8> [[TMP10]] to <4 x half>
+// CHECK:   [[TMP16:%.*]] = bitcast <8 x i8> [[TMP12]] to <4 x half>
+// CHECK:   [[VLD4_LANE_V:%.*]] = call { <4 x half>, <4 x half>, <4 x half>, <4 x half>
 float16x4x4_t test_vld4_lane_f16(float16_t const * a, float16x4x4_t b) {
   return vld4_lane_f16(a, b, 3);
 }
@@ -9165,7 +8810,7 @@ int32x2_t test_vneg_s32(int32x2_t a) {
 }
 
 // CHECK-LABEL: @test_vneg_f32(
-// CHECK:   [[SUB_I:%.*]] = fsub <2 x float> <float -0.000000e+00, float -0.000000e+00>, %a
+// CHECK:   [[SUB_I:%.*]] = fneg <2 x float> %a
 // CHECK:   ret <2 x float> [[SUB_I]]
 float32x2_t test_vneg_f32(float32x2_t a) {
   return vneg_f32(a);
@@ -9193,7 +8838,7 @@ int32x4_t test_vnegq_s32(int32x4_t a) {
 }
 
 // CHECK-LABEL: @test_vnegq_f32(
-// CHECK:   [[SUB_I:%.*]] = fsub <4 x float> <float -0.000000e+00, float -0.000000e+00, float -0.000000e+00, float -0.000000e+00>, %a
+// CHECK:   [[SUB_I:%.*]] = fneg <4 x float> %a
 // CHECK:   ret <4 x float> [[SUB_I]]
 float32x4_t test_vnegq_f32(float32x4_t a) {
   return vnegq_f32(a);
@@ -14381,18 +14026,14 @@ uint8x8_t test_vset_lane_u8(uint8_t a, uint8x8_t b) {
 }
 
 // CHECK-LABEL: @test_vset_lane_u16(
-// CHECK:   [[TMP0:%.*]] = bitcast <4 x i16> %b to <8 x i8>
-// CHECK:   [[TMP1:%.*]] = bitcast <8 x i8> [[TMP0]] to <4 x i16>
-// CHECK:   [[VSET_LANE:%.*]] = insertelement <4 x i16> [[TMP1]], i16 %a, i32 3
+// CHECK:   [[VSET_LANE:%.*]] = insertelement <4 x i16> %b, i16 %a, i32 3
 // CHECK:   ret <4 x i16> [[VSET_LANE]]
 uint16x4_t test_vset_lane_u16(uint16_t a, uint16x4_t b) {
   return vset_lane_u16(a, b, 3);
 }
 
 // CHECK-LABEL: @test_vset_lane_u32(
-// CHECK:   [[TMP0:%.*]] = bitcast <2 x i32> %b to <8 x i8>
-// CHECK:   [[TMP1:%.*]] = bitcast <8 x i8> [[TMP0]] to <2 x i32>
-// CHECK:   [[VSET_LANE:%.*]] = insertelement <2 x i32> [[TMP1]], i32 %a, i32 1
+// CHECK:   [[VSET_LANE:%.*]] = insertelement <2 x i32> %b, i32 %a, i32 1
 // CHECK:   ret <2 x i32> [[VSET_LANE]]
 uint32x2_t test_vset_lane_u32(uint32_t a, uint32x2_t b) {
   return vset_lane_u32(a, b, 1);
@@ -14406,18 +14047,14 @@ int8x8_t test_vset_lane_s8(int8_t a, int8x8_t b) {
 }
 
 // CHECK-LABEL: @test_vset_lane_s16(
-// CHECK:   [[TMP0:%.*]] = bitcast <4 x i16> %b to <8 x i8>
-// CHECK:   [[TMP1:%.*]] = bitcast <8 x i8> [[TMP0]] to <4 x i16>
-// CHECK:   [[VSET_LANE:%.*]] = insertelement <4 x i16> [[TMP1]], i16 %a, i32 3
+// CHECK:   [[VSET_LANE:%.*]] = insertelement <4 x i16> %b, i16 %a, i32 3
 // CHECK:   ret <4 x i16> [[VSET_LANE]]
 int16x4_t test_vset_lane_s16(int16_t a, int16x4_t b) {
   return vset_lane_s16(a, b, 3);
 }
 
 // CHECK-LABEL: @test_vset_lane_s32(
-// CHECK:   [[TMP0:%.*]] = bitcast <2 x i32> %b to <8 x i8>
-// CHECK:   [[TMP1:%.*]] = bitcast <8 x i8> [[TMP0]] to <2 x i32>
-// CHECK:   [[VSET_LANE:%.*]] = insertelement <2 x i32> [[TMP1]], i32 %a, i32 1
+// CHECK:   [[VSET_LANE:%.*]] = insertelement <2 x i32> %b, i32 %a, i32 1
 // CHECK:   ret <2 x i32> [[VSET_LANE]]
 int32x2_t test_vset_lane_s32(int32_t a, int32x2_t b) {
   return vset_lane_s32(a, b, 1);
@@ -14431,18 +14068,14 @@ poly8x8_t test_vset_lane_p8(poly8_t a, poly8x8_t b) {
 }
 
 // CHECK-LABEL: @test_vset_lane_p16(
-// CHECK:   [[TMP0:%.*]] = bitcast <4 x i16> %b to <8 x i8>
-// CHECK:   [[TMP1:%.*]] = bitcast <8 x i8> [[TMP0]] to <4 x i16>
-// CHECK:   [[VSET_LANE:%.*]] = insertelement <4 x i16> [[TMP1]], i16 %a, i32 3
+// CHECK:   [[VSET_LANE:%.*]] = insertelement <4 x i16> %b, i16 %a, i32 3
 // CHECK:   ret <4 x i16> [[VSET_LANE]]
 poly16x4_t test_vset_lane_p16(poly16_t a, poly16x4_t b) {
   return vset_lane_p16(a, b, 3);
 }
 
 // CHECK-LABEL: @test_vset_lane_f32(
-// CHECK:   [[TMP0:%.*]] = bitcast <2 x float> %b to <8 x i8>
-// CHECK:   [[TMP1:%.*]] = bitcast <8 x i8> [[TMP0]] to <2 x float>
-// CHECK:   [[VSET_LANE:%.*]] = insertelement <2 x float> [[TMP1]], float %a, i32 1
+// CHECK:   [[VSET_LANE:%.*]] = insertelement <2 x float> %b, float %a, i32 1
 // CHECK:   ret <2 x float> [[VSET_LANE]]
 float32x2_t test_vset_lane_f32(float32_t a, float32x2_t b) {
   return vset_lane_f32(a, b, 1);
@@ -14459,9 +14092,7 @@ float32x2_t test_vset_lane_f32(float32_t a, float32x2_t b) {
 // CHECK:   [[TMP2:%.*]] = load i16, i16* [[TMP1]], align 2
 // CHECK:   [[TMP3:%.*]] = bitcast <4 x half>* [[__REINT1_246]] to <4 x i16>*
 // CHECK:   [[TMP4:%.*]] = load <4 x i16>, <4 x i16>* [[TMP3]], align 8
-// CHECK:   [[TMP5:%.*]] = bitcast <4 x i16> [[TMP4]] to <8 x i8>
-// CHECK:   [[TMP6:%.*]] = bitcast <8 x i8> [[TMP5]] to <4 x i16>
-// CHECK:   [[VSET_LANE:%.*]] = insertelement <4 x i16> [[TMP6]], i16 [[TMP2]], i32 1
+// CHECK:   [[VSET_LANE:%.*]] = insertelement <4 x i16> [[TMP4]], i16 [[TMP2]], i32 1
 // CHECK:   store <4 x i16> [[VSET_LANE]], <4 x i16>* [[__REINT2_246]], align 8
 // CHECK:   [[TMP7:%.*]] = bitcast <4 x i16>* [[__REINT2_246]] to <4 x half>*
 // CHECK:   [[TMP8:%.*]] = load <4 x half>, <4 x half>* [[TMP7]], align 8
@@ -14478,18 +14109,14 @@ uint8x16_t test_vsetq_lane_u8(uint8_t a, uint8x16_t b) {
 }
 
 // CHECK-LABEL: @test_vsetq_lane_u16(
-// CHECK:   [[TMP0:%.*]] = bitcast <8 x i16> %b to <16 x i8>
-// CHECK:   [[TMP1:%.*]] = bitcast <16 x i8> [[TMP0]] to <8 x i16>
-// CHECK:   [[VSET_LANE:%.*]] = insertelement <8 x i16> [[TMP1]], i16 %a, i32 7
+// CHECK:   [[VSET_LANE:%.*]] = insertelement <8 x i16> %b, i16 %a, i32 7
 // CHECK:   ret <8 x i16> [[VSET_LANE]]
 uint16x8_t test_vsetq_lane_u16(uint16_t a, uint16x8_t b) {
   return vsetq_lane_u16(a, b, 7);
 }
 
 // CHECK-LABEL: @test_vsetq_lane_u32(
-// CHECK:   [[TMP0:%.*]] = bitcast <4 x i32> %b to <16 x i8>
-// CHECK:   [[TMP1:%.*]] = bitcast <16 x i8> [[TMP0]] to <4 x i32>
-// CHECK:   [[VSET_LANE:%.*]] = insertelement <4 x i32> [[TMP1]], i32 %a, i32 3
+// CHECK:   [[VSET_LANE:%.*]] = insertelement <4 x i32> %b, i32 %a, i32 3
 // CHECK:   ret <4 x i32> [[VSET_LANE]]
 uint32x4_t test_vsetq_lane_u32(uint32_t a, uint32x4_t b) {
   return vsetq_lane_u32(a, b, 3);
@@ -14503,18 +14130,14 @@ int8x16_t test_vsetq_lane_s8(int8_t a, int8x16_t b) {
 }
 
 // CHECK-LABEL: @test_vsetq_lane_s16(
-// CHECK:   [[TMP0:%.*]] = bitcast <8 x i16> %b to <16 x i8>
-// CHECK:   [[TMP1:%.*]] = bitcast <16 x i8> [[TMP0]] to <8 x i16>
-// CHECK:   [[VSET_LANE:%.*]] = insertelement <8 x i16> [[TMP1]], i16 %a, i32 7
+// CHECK:   [[VSET_LANE:%.*]] = insertelement <8 x i16> %b, i16 %a, i32 7
 // CHECK:   ret <8 x i16> [[VSET_LANE]]
 int16x8_t test_vsetq_lane_s16(int16_t a, int16x8_t b) {
   return vsetq_lane_s16(a, b, 7);
 }
 
 // CHECK-LABEL: @test_vsetq_lane_s32(
-// CHECK:   [[TMP0:%.*]] = bitcast <4 x i32> %b to <16 x i8>
-// CHECK:   [[TMP1:%.*]] = bitcast <16 x i8> [[TMP0]] to <4 x i32>
-// CHECK:   [[VSET_LANE:%.*]] = insertelement <4 x i32> [[TMP1]], i32 %a, i32 3
+// CHECK:   [[VSET_LANE:%.*]] = insertelement <4 x i32> %b, i32 %a, i32 3
 // CHECK:   ret <4 x i32> [[VSET_LANE]]
 int32x4_t test_vsetq_lane_s32(int32_t a, int32x4_t b) {
   return vsetq_lane_s32(a, b, 3);
@@ -14528,18 +14151,14 @@ poly8x16_t test_vsetq_lane_p8(poly8_t a, poly8x16_t b) {
 }
 
 // CHECK-LABEL: @test_vsetq_lane_p16(
-// CHECK:   [[TMP0:%.*]] = bitcast <8 x i16> %b to <16 x i8>
-// CHECK:   [[TMP1:%.*]] = bitcast <16 x i8> [[TMP0]] to <8 x i16>
-// CHECK:   [[VSET_LANE:%.*]] = insertelement <8 x i16> [[TMP1]], i16 %a, i32 7
+// CHECK:   [[VSET_LANE:%.*]] = insertelement <8 x i16> %b, i16 %a, i32 7
 // CHECK:   ret <8 x i16> [[VSET_LANE]]
 poly16x8_t test_vsetq_lane_p16(poly16_t a, poly16x8_t b) {
   return vsetq_lane_p16(a, b, 7);
 }
 
 // CHECK-LABEL: @test_vsetq_lane_f32(
-// CHECK:   [[TMP0:%.*]] = bitcast <4 x float> %b to <16 x i8>
-// CHECK:   [[TMP1:%.*]] = bitcast <16 x i8> [[TMP0]] to <4 x float>
-// CHECK:   [[VSET_LANE:%.*]] = insertelement <4 x float> [[TMP1]], float %a, i32 3
+// CHECK:   [[VSET_LANE:%.*]] = insertelement <4 x float> %b, float %a, i32 3
 // CHECK:   ret <4 x float> [[VSET_LANE]]
 float32x4_t test_vsetq_lane_f32(float32_t a, float32x4_t b) {
   return vsetq_lane_f32(a, b, 3);
@@ -14556,9 +14175,7 @@ float32x4_t test_vsetq_lane_f32(float32_t a, float32x4_t b) {
 // CHECK:   [[TMP2:%.*]] = load i16, i16* [[TMP1]], align 2
 // CHECK:   [[TMP3:%.*]] = bitcast <8 x half>* [[__REINT1_248]] to <8 x i16>*
 // CHECK:   [[TMP4:%.*]] = load <8 x i16>, <8 x i16>* [[TMP3]], align 16
-// CHECK:   [[TMP5:%.*]] = bitcast <8 x i16> [[TMP4]] to <16 x i8>
-// CHECK:   [[TMP6:%.*]] = bitcast <16 x i8> [[TMP5]] to <8 x i16>
-// CHECK:   [[VSET_LANE:%.*]] = insertelement <8 x i16> [[TMP6]], i16 [[TMP2]], i32 3
+// CHECK:   [[VSET_LANE:%.*]] = insertelement <8 x i16> [[TMP4]], i16 [[TMP2]], i32 3
 // CHECK:   store <8 x i16> [[VSET_LANE]], <8 x i16>* [[__REINT2_248]], align 16
 // CHECK:   [[TMP7:%.*]] = bitcast <8 x i16>* [[__REINT2_248]] to <8 x half>*
 // CHECK:   [[TMP8:%.*]] = load <8 x half>, <8 x half>* [[TMP7]], align 16
@@ -14568,36 +14185,28 @@ float16x8_t test_vsetq_lane_f16(float16_t *a, float16x8_t b) {
 }
 
 // CHECK-LABEL: @test_vset_lane_s64(
-// CHECK:   [[TMP0:%.*]] = bitcast <1 x i64> %b to <8 x i8>
-// CHECK:   [[TMP1:%.*]] = bitcast <8 x i8> [[TMP0]] to <1 x i64>
-// CHECK:   [[VSET_LANE:%.*]] = insertelement <1 x i64> [[TMP1]], i64 %a, i32 0
+// CHECK:   [[VSET_LANE:%.*]] = insertelement <1 x i64> %b, i64 %a, i32 0
 // CHECK:   ret <1 x i64> [[VSET_LANE]]
 int64x1_t test_vset_lane_s64(int64_t a, int64x1_t b) {
   return vset_lane_s64(a, b, 0);
 }
 
 // CHECK-LABEL: @test_vset_lane_u64(
-// CHECK:   [[TMP0:%.*]] = bitcast <1 x i64> %b to <8 x i8>
-// CHECK:   [[TMP1:%.*]] = bitcast <8 x i8> [[TMP0]] to <1 x i64>
-// CHECK:   [[VSET_LANE:%.*]] = insertelement <1 x i64> [[TMP1]], i64 %a, i32 0
+// CHECK:   [[VSET_LANE:%.*]] = insertelement <1 x i64> %b, i64 %a, i32 0
 // CHECK:   ret <1 x i64> [[VSET_LANE]]
 uint64x1_t test_vset_lane_u64(uint64_t a, uint64x1_t b) {
   return vset_lane_u64(a, b, 0);
 }
 
 // CHECK-LABEL: @test_vsetq_lane_s64(
-// CHECK:   [[TMP0:%.*]] = bitcast <2 x i64> %b to <16 x i8>
-// CHECK:   [[TMP1:%.*]] = bitcast <16 x i8> [[TMP0]] to <2 x i64>
-// CHECK:   [[VSET_LANE:%.*]] = insertelement <2 x i64> [[TMP1]], i64 %a, i32 1
+// CHECK:   [[VSET_LANE:%.*]] = insertelement <2 x i64> %b, i64 %a, i32 1
 // CHECK:   ret <2 x i64> [[VSET_LANE]]
 int64x2_t test_vsetq_lane_s64(int64_t a, int64x2_t b) {
   return vsetq_lane_s64(a, b, 1);
 }
 
 // CHECK-LABEL: @test_vsetq_lane_u64(
-// CHECK:   [[TMP0:%.*]] = bitcast <2 x i64> %b to <16 x i8>
-// CHECK:   [[TMP1:%.*]] = bitcast <16 x i8> [[TMP0]] to <2 x i64>
-// CHECK:   [[VSET_LANE:%.*]] = insertelement <2 x i64> [[TMP1]], i64 %a, i32 1
+// CHECK:   [[VSET_LANE:%.*]] = insertelement <2 x i64> %b, i64 %a, i32 1
 // CHECK:   ret <2 x i64> [[VSET_LANE]]
 uint64x2_t test_vsetq_lane_u64(uint64_t a, uint64x2_t b) {
   return vsetq_lane_u64(a, b, 1);
@@ -15784,8 +15393,8 @@ void test_vst1q_s64(int64_t * a, int64x2_t b) {
 // CHECK-LABEL: @test_vst1q_f16(
 // CHECK:   [[TMP0:%.*]] = bitcast half* %a to i8*
 // CHECK:   [[TMP1:%.*]] = bitcast <8 x half> %b to <16 x i8>
-// CHECK:   [[TMP2:%.*]] = bitcast <16 x i8> [[TMP1]] to <8 x i16>
-// CHECK:   call void @llvm.arm.neon.vst1.p0i8.v8i16(i8* [[TMP0]], <8 x i16> [[TMP2]], i32 2)
+// CHECK:   [[TMP2:%.*]] = bitcast <16 x i8> [[TMP1]] to <8 x half>
+// CHECK:   call void @llvm.arm.neon.vst1.p0i8.v8f16(i8* [[TMP0]], <8 x half> [[TMP2]], i32 2)
 // CHECK:   ret void
 void test_vst1q_f16(float16_t * a, float16x8_t b) {
   vst1q_f16(a, b);
@@ -15895,8 +15504,8 @@ void test_vst1_s64(int64_t * a, int64x1_t b) {
 // CHECK-LABEL: @test_vst1_f16(
 // CHECK:   [[TMP0:%.*]] = bitcast half* %a to i8*
 // CHECK:   [[TMP1:%.*]] = bitcast <4 x half> %b to <8 x i8>
-// CHECK:   [[TMP2:%.*]] = bitcast <8 x i8> [[TMP1]] to <4 x i16>
-// CHECK:   call void @llvm.arm.neon.vst1.p0i8.v4i16(i8* [[TMP0]], <4 x i16> [[TMP2]], i32 2)
+// CHECK:   [[TMP2:%.*]] = bitcast <8 x i8> [[TMP1]] to <4 x half>
+// CHECK:   call void @llvm.arm.neon.vst1.p0i8.v4f16(i8* [[TMP0]], <4 x half> [[TMP2]], i32 2)
 // CHECK:   ret void
 void test_vst1_f16(float16_t * a, float16x4_t b) {
   vst1_f16(a, b);
@@ -16018,10 +15627,10 @@ void test_vst1q_lane_s64(int64_t * a, int64x2_t b) {
 // CHECK-LABEL: @test_vst1q_lane_f16(
 // CHECK:   [[TMP0:%.*]] = bitcast half* %a to i8*
 // CHECK:   [[TMP1:%.*]] = bitcast <8 x half> %b to <16 x i8>
-// CHECK:   [[TMP2:%.*]] = bitcast <16 x i8> [[TMP1]] to <8 x i16>
-// CHECK:   [[TMP3:%.*]] = extractelement <8 x i16> [[TMP2]], i32 7
-// CHECK:   [[TMP4:%.*]] = bitcast i8* [[TMP0]] to i16*
-// CHECK:   store i16 [[TMP3]], i16* [[TMP4]], align 2
+// CHECK:   [[TMP2:%.*]] = bitcast <16 x i8> [[TMP1]] to <8 x half>
+// CHECK:   [[TMP3:%.*]] = extractelement <8 x half> [[TMP2]], i32 7
+// CHECK:   [[TMP4:%.*]] = bitcast i8* [[TMP0]] to half*
+// CHECK:   store half [[TMP3]], half* [[TMP4]], align 2
 // CHECK:   ret void
 void test_vst1q_lane_f16(float16_t * a, float16x8_t b) {
   vst1q_lane_f16(a, b, 7);
@@ -16150,10 +15759,10 @@ void test_vst1_lane_s64(int64_t * a, int64x1_t b) {
 // CHECK-LABEL: @test_vst1_lane_f16(
 // CHECK:   [[TMP0:%.*]] = bitcast half* %a to i8*
 // CHECK:   [[TMP1:%.*]] = bitcast <4 x half> %b to <8 x i8>
-// CHECK:   [[TMP2:%.*]] = bitcast <8 x i8> [[TMP1]] to <4 x i16>
-// CHECK:   [[TMP3:%.*]] = extractelement <4 x i16> [[TMP2]], i32 3
-// CHECK:   [[TMP4:%.*]] = bitcast i8* [[TMP0]] to i16*
-// CHECK:   store i16 [[TMP3]], i16* [[TMP4]], align 2
+// CHECK:   [[TMP2:%.*]] = bitcast <8 x i8> [[TMP1]] to <4 x half>
+// CHECK:   [[TMP3:%.*]] = extractelement <4 x half> [[TMP2]], i32 3
+// CHECK:   [[TMP4:%.*]] = bitcast i8* [[TMP0]] to half*
+// CHECK:   store half [[TMP3]], half* [[TMP4]], align 2
 // CHECK:   ret void
 void test_vst1_lane_f16(float16_t * a, float16x4_t b) {
   vst1_lane_f16(a, b, 3);
@@ -16355,9 +15964,9 @@ void test_vst2q_s32(int32_t * a, int32x4x2_t b) {
 // CHECK:   [[ARRAYIDX2:%.*]] = getelementptr inbounds [2 x <8 x half>], [2 x <8 x half>]* [[VAL1]], i32 0, i32 1
 // CHECK:   [[TMP6:%.*]] = load <8 x half>, <8 x half>* [[ARRAYIDX2]], align 16
 // CHECK:   [[TMP7:%.*]] = bitcast <8 x half> [[TMP6]] to <16 x i8>
-// CHECK:   [[TMP8:%.*]] = bitcast <16 x i8> [[TMP5]] to <8 x i16>
-// CHECK:   [[TMP9:%.*]] = bitcast <16 x i8> [[TMP7]] to <8 x i16>
-// CHECK:   call void @llvm.arm.neon.vst2.p0i8.v8i16(i8* [[TMP3]], <8 x i16> [[TMP8]], <8 x i16> [[TMP9]], i32 2)
+// CHECK:   [[TMP8:%.*]] = bitcast <16 x i8> [[TMP5]] to <8 x half>
+// CHECK:   [[TMP9:%.*]] = bitcast <16 x i8> [[TMP7]] to <8 x half>
+// CHECK:   call void @llvm.arm.neon.vst2.p0i8.v8f16(i8* [[TMP3]], <8 x half> [[TMP8]], <8 x half> [[TMP9]], i32 2)
 // CHECK:   ret void
 void test_vst2q_f16(float16_t * a, float16x8x2_t b) {
   vst2q_f16(a, b);
@@ -16652,9 +16261,9 @@ void test_vst2_s64(int64_t * a, int64x1x2_t b) {
 // CHECK:   [[ARRAYIDX2:%.*]] = getelementptr inbounds [2 x <4 x half>], [2 x <4 x half>]* [[VAL1]], i32 0, i32 1
 // CHECK:   [[TMP6:%.*]] = load <4 x half>, <4 x half>* [[ARRAYIDX2]], align 8
 // CHECK:   [[TMP7:%.*]] = bitcast <4 x half> [[TMP6]] to <8 x i8>
-// CHECK:   [[TMP8:%.*]] = bitcast <8 x i8> [[TMP5]] to <4 x i16>
-// CHECK:   [[TMP9:%.*]] = bitcast <8 x i8> [[TMP7]] to <4 x i16>
-// CHECK:   call void @llvm.arm.neon.vst2.p0i8.v4i16(i8* [[TMP3]], <4 x i16> [[TMP8]], <4 x i16> [[TMP9]], i32 2)
+// CHECK:   [[TMP8:%.*]] = bitcast <8 x i8> [[TMP5]] to <4 x half>
+// CHECK:   [[TMP9:%.*]] = bitcast <8 x i8> [[TMP7]] to <4 x half>
+// CHECK:   call void @llvm.arm.neon.vst2.p0i8.v4f16(i8* [[TMP3]], <4 x half> [[TMP8]], <4 x half> [[TMP9]], i32 2)
 // CHECK:   ret void
 void test_vst2_f16(float16_t * a, float16x4x2_t b) {
   vst2_f16(a, b);
@@ -16855,9 +16464,9 @@ void test_vst2q_lane_s32(int32_t * a, int32x4x2_t b) {
 // CHECK:   [[ARRAYIDX2:%.*]] = getelementptr inbounds [2 x <8 x half>], [2 x <8 x half>]* [[VAL1]], i32 0, i32 1
 // CHECK:   [[TMP6:%.*]] = load <8 x half>, <8 x half>* [[ARRAYIDX2]], align 16
 // CHECK:   [[TMP7:%.*]] = bitcast <8 x half> [[TMP6]] to <16 x i8>
-// CHECK:   [[TMP8:%.*]] = bitcast <16 x i8> [[TMP5]] to <8 x i16>
-// CHECK:   [[TMP9:%.*]] = bitcast <16 x i8> [[TMP7]] to <8 x i16>
-// CHECK:   call void @llvm.arm.neon.vst2lane.p0i8.v8i16(i8* [[TMP3]], <8 x i16> [[TMP8]], <8 x i16> [[TMP9]], i32 7, i32 2)
+// CHECK:   [[TMP8:%.*]] = bitcast <16 x i8> [[TMP5]] to <8 x half>
+// CHECK:   [[TMP9:%.*]] = bitcast <16 x i8> [[TMP7]] to <8 x half>
+// CHECK:   call void @llvm.arm.neon.vst2lane.p0i8.v8f16(i8* [[TMP3]], <8 x half> [[TMP8]], <8 x half> [[TMP9]], i32 7, i32 2)
 // CHECK:   ret void
 void test_vst2q_lane_f16(float16_t * a, float16x8x2_t b) {
   vst2q_lane_f16(a, b, 7);
@@ -17079,9 +16688,9 @@ void test_vst2_lane_s32(int32_t * a, int32x2x2_t b) {
 // CHECK:   [[ARRAYIDX2:%.*]] = getelementptr inbounds [2 x <4 x half>], [2 x <4 x half>]* [[VAL1]], i32 0, i32 1
 // CHECK:   [[TMP6:%.*]] = load <4 x half>, <4 x half>* [[ARRAYIDX2]], align 8
 // CHECK:   [[TMP7:%.*]] = bitcast <4 x half> [[TMP6]] to <8 x i8>
-// CHECK:   [[TMP8:%.*]] = bitcast <8 x i8> [[TMP5]] to <4 x i16>
-// CHECK:   [[TMP9:%.*]] = bitcast <8 x i8> [[TMP7]] to <4 x i16>
-// CHECK:   call void @llvm.arm.neon.vst2lane.p0i8.v4i16(i8* [[TMP3]], <4 x i16> [[TMP8]], <4 x i16> [[TMP9]], i32 3, i32 2)
+// CHECK:   [[TMP8:%.*]] = bitcast <8 x i8> [[TMP5]] to <4 x half>
+// CHECK:   [[TMP9:%.*]] = bitcast <8 x i8> [[TMP7]] to <4 x half>
+// CHECK:   call void @llvm.arm.neon.vst2lane.p0i8.v4f16(i8* [[TMP3]], <4 x half> [[TMP8]], <4 x half> [[TMP9]], i32 3, i32 2)
 // CHECK:   ret void
 void test_vst2_lane_f16(float16_t * a, float16x4x2_t b) {
   vst2_lane_f16(a, b, 3);
@@ -17354,10 +16963,10 @@ void test_vst3q_s32(int32_t * a, int32x4x3_t b) {
 // CHECK:   [[ARRAYIDX4:%.*]] = getelementptr inbounds [3 x <8 x half>], [3 x <8 x half>]* [[VAL3]], i32 0, i32 2
 // CHECK:   [[TMP8:%.*]] = load <8 x half>, <8 x half>* [[ARRAYIDX4]], align 16
 // CHECK:   [[TMP9:%.*]] = bitcast <8 x half> [[TMP8]] to <16 x i8>
-// CHECK:   [[TMP10:%.*]] = bitcast <16 x i8> [[TMP5]] to <8 x i16>
-// CHECK:   [[TMP11:%.*]] = bitcast <16 x i8> [[TMP7]] to <8 x i16>
-// CHECK:   [[TMP12:%.*]] = bitcast <16 x i8> [[TMP9]] to <8 x i16>
-// CHECK:   call void @llvm.arm.neon.vst3.p0i8.v8i16(i8* [[TMP3]], <8 x i16> [[TMP10]], <8 x i16> [[TMP11]], <8 x i16> [[TMP12]], i32 2)
+// CHECK:   [[TMP10:%.*]] = bitcast <16 x i8> [[TMP5]] to <8 x half>
+// CHECK:   [[TMP11:%.*]] = bitcast <16 x i8> [[TMP7]] to <8 x half>
+// CHECK:   [[TMP12:%.*]] = bitcast <16 x i8> [[TMP9]] to <8 x half>
+// CHECK:   call void @llvm.arm.neon.vst3.p0i8.v8f16(i8* [[TMP3]], <8 x half> [[TMP10]], <8 x half> [[TMP11]], <8 x half> [[TMP12]], i32 2)
 // CHECK:   ret void
 void test_vst3q_f16(float16_t * a, float16x8x3_t b) {
   vst3q_f16(a, b);
@@ -17705,10 +17314,10 @@ void test_vst3_s64(int64_t * a, int64x1x3_t b) {
 // CHECK:   [[ARRAYIDX4:%.*]] = getelementptr inbounds [3 x <4 x half>], [3 x <4 x half>]* [[VAL3]], i32 0, i32 2
 // CHECK:   [[TMP8:%.*]] = load <4 x half>, <4 x half>* [[ARRAYIDX4]], align 8
 // CHECK:   [[TMP9:%.*]] = bitcast <4 x half> [[TMP8]] to <8 x i8>
-// CHECK:   [[TMP10:%.*]] = bitcast <8 x i8> [[TMP5]] to <4 x i16>
-// CHECK:   [[TMP11:%.*]] = bitcast <8 x i8> [[TMP7]] to <4 x i16>
-// CHECK:   [[TMP12:%.*]] = bitcast <8 x i8> [[TMP9]] to <4 x i16>
-// CHECK:   call void @llvm.arm.neon.vst3.p0i8.v4i16(i8* [[TMP3]], <4 x i16> [[TMP10]], <4 x i16> [[TMP11]], <4 x i16> [[TMP12]], i32 2)
+// CHECK:   [[TMP10:%.*]] = bitcast <8 x i8> [[TMP5]] to <4 x half>
+// CHECK:   [[TMP11:%.*]] = bitcast <8 x i8> [[TMP7]] to <4 x half>
+// CHECK:   [[TMP12:%.*]] = bitcast <8 x i8> [[TMP9]] to <4 x half>
+// CHECK:   call void @llvm.arm.neon.vst3.p0i8.v4f16(i8* [[TMP3]], <4 x half> [[TMP10]], <4 x half> [[TMP11]], <4 x half> [[TMP12]], i32 2)
 // CHECK:   ret void
 void test_vst3_f16(float16_t * a, float16x4x3_t b) {
   vst3_f16(a, b);
@@ -17946,10 +17555,10 @@ void test_vst3q_lane_s32(int32_t * a, int32x4x3_t b) {
 // CHECK:   [[ARRAYIDX4:%.*]] = getelementptr inbounds [3 x <8 x half>], [3 x <8 x half>]* [[VAL3]], i32 0, i32 2
 // CHECK:   [[TMP8:%.*]] = load <8 x half>, <8 x half>* [[ARRAYIDX4]], align 16
 // CHECK:   [[TMP9:%.*]] = bitcast <8 x half> [[TMP8]] to <16 x i8>
-// CHECK:   [[TMP10:%.*]] = bitcast <16 x i8> [[TMP5]] to <8 x i16>
-// CHECK:   [[TMP11:%.*]] = bitcast <16 x i8> [[TMP7]] to <8 x i16>
-// CHECK:   [[TMP12:%.*]] = bitcast <16 x i8> [[TMP9]] to <8 x i16>
-// CHECK:   call void @llvm.arm.neon.vst3lane.p0i8.v8i16(i8* [[TMP3]], <8 x i16> [[TMP10]], <8 x i16> [[TMP11]], <8 x i16> [[TMP12]], i32 7, i32 2)
+// CHECK:   [[TMP10:%.*]] = bitcast <16 x i8> [[TMP5]] to <8 x half>
+// CHECK:   [[TMP11:%.*]] = bitcast <16 x i8> [[TMP7]] to <8 x half>
+// CHECK:   [[TMP12:%.*]] = bitcast <16 x i8> [[TMP9]] to <8 x half>
+// CHECK:   call void @llvm.arm.neon.vst3lane.p0i8.v8f16(i8* [[TMP3]], <8 x half> [[TMP10]], <8 x half> [[TMP11]], <8 x half> [[TMP12]], i32 7, i32 2)
 // CHECK:   ret void
 void test_vst3q_lane_f16(float16_t * a, float16x8x3_t b) {
   vst3q_lane_f16(a, b, 7);
@@ -18211,10 +17820,10 @@ void test_vst3_lane_s32(int32_t * a, int32x2x3_t b) {
 // CHECK:   [[ARRAYIDX4:%.*]] = getelementptr inbounds [3 x <4 x half>], [3 x <4 x half>]* [[VAL3]], i32 0, i32 2
 // CHECK:   [[TMP8:%.*]] = load <4 x half>, <4 x half>* [[ARRAYIDX4]], align 8
 // CHECK:   [[TMP9:%.*]] = bitcast <4 x half> [[TMP8]] to <8 x i8>
-// CHECK:   [[TMP10:%.*]] = bitcast <8 x i8> [[TMP5]] to <4 x i16>
-// CHECK:   [[TMP11:%.*]] = bitcast <8 x i8> [[TMP7]] to <4 x i16>
-// CHECK:   [[TMP12:%.*]] = bitcast <8 x i8> [[TMP9]] to <4 x i16>
-// CHECK:   call void @llvm.arm.neon.vst3lane.p0i8.v4i16(i8* [[TMP3]], <4 x i16> [[TMP10]], <4 x i16> [[TMP11]], <4 x i16> [[TMP12]], i32 3, i32 2)
+// CHECK:   [[TMP10:%.*]] = bitcast <8 x i8> [[TMP5]] to <4 x half>
+// CHECK:   [[TMP11:%.*]] = bitcast <8 x i8> [[TMP7]] to <4 x half>
+// CHECK:   [[TMP12:%.*]] = bitcast <8 x i8> [[TMP9]] to <4 x half>
+// CHECK:   call void @llvm.arm.neon.vst3lane.p0i8.v4f16(i8* [[TMP3]], <4 x half> [[TMP10]], <4 x half> [[TMP11]], <4 x half> [[TMP12]], i32 3, i32 2)
 // CHECK:   ret void
 void test_vst3_lane_f16(float16_t * a, float16x4x3_t b) {
   vst3_lane_f16(a, b, 3);
@@ -18530,11 +18139,11 @@ void test_vst4q_s32(int32_t * a, int32x4x4_t b) {
 // CHECK:   [[ARRAYIDX6:%.*]] = getelementptr inbounds [4 x <8 x half>], [4 x <8 x half>]* [[VAL5]], i32 0, i32 3
 // CHECK:   [[TMP10:%.*]] = load <8 x half>, <8 x half>* [[ARRAYIDX6]], align 16
 // CHECK:   [[TMP11:%.*]] = bitcast <8 x half> [[TMP10]] to <16 x i8>
-// CHECK:   [[TMP12:%.*]] = bitcast <16 x i8> [[TMP5]] to <8 x i16>
-// CHECK:   [[TMP13:%.*]] = bitcast <16 x i8> [[TMP7]] to <8 x i16>
-// CHECK:   [[TMP14:%.*]] = bitcast <16 x i8> [[TMP9]] to <8 x i16>
-// CHECK:   [[TMP15:%.*]] = bitcast <16 x i8> [[TMP11]] to <8 x i16>
-// CHECK:   call void @llvm.arm.neon.vst4.p0i8.v8i16(i8* [[TMP3]], <8 x i16> [[TMP12]], <8 x i16> [[TMP13]], <8 x i16> [[TMP14]], <8 x i16> [[TMP15]], i32 2)
+// CHECK:   [[TMP12:%.*]] = bitcast <16 x i8> [[TMP5]] to <8 x half>
+// CHECK:   [[TMP13:%.*]] = bitcast <16 x i8> [[TMP7]] to <8 x half>
+// CHECK:   [[TMP14:%.*]] = bitcast <16 x i8> [[TMP9]] to <8 x half>
+// CHECK:   [[TMP15:%.*]] = bitcast <16 x i8> [[TMP11]] to <8 x half>
+// CHECK:   call void @llvm.arm.neon.vst4.p0i8.v8f16(i8* [[TMP3]], <8 x half> [[TMP12]], <8 x half> [[TMP13]], <8 x half> [[TMP14]], <8 x half> [[TMP15]], i32 2)
 // CHECK:   ret void
 void test_vst4q_f16(float16_t * a, float16x8x4_t b) {
   vst4q_f16(a, b);
@@ -18935,11 +18544,11 @@ void test_vst4_s64(int64_t * a, int64x1x4_t b) {
 // CHECK:   [[ARRAYIDX6:%.*]] = getelementptr inbounds [4 x <4 x half>], [4 x <4 x half>]* [[VAL5]], i32 0, i32 3
 // CHECK:   [[TMP10:%.*]] = load <4 x half>, <4 x half>* [[ARRAYIDX6]], align 8
 // CHECK:   [[TMP11:%.*]] = bitcast <4 x half> [[TMP10]] to <8 x i8>
-// CHECK:   [[TMP12:%.*]] = bitcast <8 x i8> [[TMP5]] to <4 x i16>
-// CHECK:   [[TMP13:%.*]] = bitcast <8 x i8> [[TMP7]] to <4 x i16>
-// CHECK:   [[TMP14:%.*]] = bitcast <8 x i8> [[TMP9]] to <4 x i16>
-// CHECK:   [[TMP15:%.*]] = bitcast <8 x i8> [[TMP11]] to <4 x i16>
-// CHECK:   call void @llvm.arm.neon.vst4.p0i8.v4i16(i8* [[TMP3]], <4 x i16> [[TMP12]], <4 x i16> [[TMP13]], <4 x i16> [[TMP14]], <4 x i16> [[TMP15]], i32 2)
+// CHECK:   [[TMP12:%.*]] = bitcast <8 x i8> [[TMP5]] to <4 x half>
+// CHECK:   [[TMP13:%.*]] = bitcast <8 x i8> [[TMP7]] to <4 x half>
+// CHECK:   [[TMP14:%.*]] = bitcast <8 x i8> [[TMP9]] to <4 x half>
+// CHECK:   [[TMP15:%.*]] = bitcast <8 x i8> [[TMP11]] to <4 x half>
+// CHECK:   call void @llvm.arm.neon.vst4.p0i8.v4f16(i8* [[TMP3]], <4 x half> [[TMP12]], <4 x half> [[TMP13]], <4 x half> [[TMP14]], <4 x half> [[TMP15]], i32 2)
 // CHECK:   ret void
 void test_vst4_f16(float16_t * a, float16x4x4_t b) {
   vst4_f16(a, b);
@@ -19214,11 +18823,11 @@ void test_vst4q_lane_s32(int32_t * a, int32x4x4_t b) {
 // CHECK:   [[ARRAYIDX6:%.*]] = getelementptr inbounds [4 x <8 x half>], [4 x <8 x half>]* [[VAL5]], i32 0, i32 3
 // CHECK:   [[TMP10:%.*]] = load <8 x half>, <8 x half>* [[ARRAYIDX6]], align 16
 // CHECK:   [[TMP11:%.*]] = bitcast <8 x half> [[TMP10]] to <16 x i8>
-// CHECK:   [[TMP12:%.*]] = bitcast <16 x i8> [[TMP5]] to <8 x i16>
-// CHECK:   [[TMP13:%.*]] = bitcast <16 x i8> [[TMP7]] to <8 x i16>
-// CHECK:   [[TMP14:%.*]] = bitcast <16 x i8> [[TMP9]] to <8 x i16>
-// CHECK:   [[TMP15:%.*]] = bitcast <16 x i8> [[TMP11]] to <8 x i16>
-// CHECK:   call void @llvm.arm.neon.vst4lane.p0i8.v8i16(i8* [[TMP3]], <8 x i16> [[TMP12]], <8 x i16> [[TMP13]], <8 x i16> [[TMP14]], <8 x i16> [[TMP15]], i32 7, i32 2)
+// CHECK:   [[TMP12:%.*]] = bitcast <16 x i8> [[TMP5]] to <8 x half>
+// CHECK:   [[TMP13:%.*]] = bitcast <16 x i8> [[TMP7]] to <8 x half>
+// CHECK:   [[TMP14:%.*]] = bitcast <16 x i8> [[TMP9]] to <8 x half>
+// CHECK:   [[TMP15:%.*]] = bitcast <16 x i8> [[TMP11]] to <8 x half>
+// CHECK:   call void @llvm.arm.neon.vst4lane.p0i8.v8f16(i8* [[TMP3]], <8 x half> [[TMP12]], <8 x half> [[TMP13]], <8 x half> [[TMP14]], <8 x half> [[TMP15]], i32 7, i32 2)
 // CHECK:   ret void
 void test_vst4q_lane_f16(float16_t * a, float16x8x4_t b) {
   vst4q_lane_f16(a, b, 7);
@@ -19520,11 +19129,11 @@ void test_vst4_lane_s32(int32_t * a, int32x2x4_t b) {
 // CHECK:   [[ARRAYIDX6:%.*]] = getelementptr inbounds [4 x <4 x half>], [4 x <4 x half>]* [[VAL5]], i32 0, i32 3
 // CHECK:   [[TMP10:%.*]] = load <4 x half>, <4 x half>* [[ARRAYIDX6]], align 8
 // CHECK:   [[TMP11:%.*]] = bitcast <4 x half> [[TMP10]] to <8 x i8>
-// CHECK:   [[TMP12:%.*]] = bitcast <8 x i8> [[TMP5]] to <4 x i16>
-// CHECK:   [[TMP13:%.*]] = bitcast <8 x i8> [[TMP7]] to <4 x i16>
-// CHECK:   [[TMP14:%.*]] = bitcast <8 x i8> [[TMP9]] to <4 x i16>
-// CHECK:   [[TMP15:%.*]] = bitcast <8 x i8> [[TMP11]] to <4 x i16>
-// CHECK:   call void @llvm.arm.neon.vst4lane.p0i8.v4i16(i8* [[TMP3]], <4 x i16> [[TMP12]], <4 x i16> [[TMP13]], <4 x i16> [[TMP14]], <4 x i16> [[TMP15]], i32 3, i32 2)
+// CHECK:   [[TMP12:%.*]] = bitcast <8 x i8> [[TMP5]] to <4 x half>
+// CHECK:   [[TMP13:%.*]] = bitcast <8 x i8> [[TMP7]] to <4 x half>
+// CHECK:   [[TMP14:%.*]] = bitcast <8 x i8> [[TMP9]] to <4 x half>
+// CHECK:   [[TMP15:%.*]] = bitcast <8 x i8> [[TMP11]] to <4 x half>
+// CHECK:   call void @llvm.arm.neon.vst4lane.p0i8.v4f16(i8* [[TMP3]], <4 x half> [[TMP12]], <4 x half> [[TMP13]], <4 x half> [[TMP14]], <4 x half> [[TMP15]], i32 3, i32 2)
 // CHECK:   ret void
 void test_vst4_lane_f16(float16_t * a, float16x4x4_t b) {
   vst4_lane_f16(a, b, 3);

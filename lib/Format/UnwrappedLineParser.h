@@ -1,14 +1,13 @@
 //===--- UnwrappedLineParser.h - Format C++ code ----------------*- C++ -*-===//
 //
-//                     The LLVM Compiler Infrastructure
-//
-// This file is distributed under the University of Illinois Open Source
-// License. See LICENSE.TXT for details.
+// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
 //===----------------------------------------------------------------------===//
 ///
 /// \file
-/// \brief This file contains the declaration of the UnwrappedLineParser,
+/// This file contains the declaration of the UnwrappedLineParser,
 /// which turns a stream of tokens into UnwrappedLines.
 ///
 //===----------------------------------------------------------------------===//
@@ -28,7 +27,7 @@ namespace format {
 
 struct UnwrappedLineNode;
 
-/// \brief An unwrapped line is a sequence of \c Token, that we would like to
+/// An unwrapped line is a sequence of \c Token, that we would like to
 /// put on a single line if there was no column limit.
 ///
 /// This is used as a main interface between the \c UnwrappedLineParser and the
@@ -38,24 +37,24 @@ struct UnwrappedLine {
   UnwrappedLine();
 
   // FIXME: Don't use std::list here.
-  /// \brief The \c Tokens comprising this \c UnwrappedLine.
+  /// The \c Tokens comprising this \c UnwrappedLine.
   std::list<UnwrappedLineNode> Tokens;
 
-  /// \brief The indent level of the \c UnwrappedLine.
+  /// The indent level of the \c UnwrappedLine.
   unsigned Level;
 
-  /// \brief Whether this \c UnwrappedLine is part of a preprocessor directive.
+  /// Whether this \c UnwrappedLine is part of a preprocessor directive.
   bool InPPDirective;
 
   bool MustBeDeclaration;
 
-  /// \brief If this \c UnwrappedLine closes a block in a sequence of lines,
+  /// If this \c UnwrappedLine closes a block in a sequence of lines,
   /// \c MatchingOpeningBlockLineIndex stores the index of the corresponding
   /// opening line. Otherwise, \c MatchingOpeningBlockLineIndex must be
   /// \c kInvalidIndex.
   size_t MatchingOpeningBlockLineIndex = kInvalidIndex;
 
-  /// \brief If this \c UnwrappedLine opens a block, stores the index of the
+  /// If this \c UnwrappedLine opens a block, stores the index of the
   /// line with the corresponding closing brace.
   size_t MatchingClosingBlockLineIndex = kInvalidIndex;
 
@@ -77,8 +76,7 @@ class UnwrappedLineParser {
 public:
   UnwrappedLineParser(const FormatStyle &Style,
                       const AdditionalKeywords &Keywords,
-                      unsigned FirstStartColumn,
-                      ArrayRef<FormatToken *> Tokens,
+                      unsigned FirstStartColumn, ArrayRef<FormatToken *> Tokens,
                       UnwrappedLineConsumer &Callback);
 
   void parse();
@@ -108,7 +106,7 @@ private:
   void parseTryCatch();
   void parseForOrWhileLoop();
   void parseDoWhile();
-  void parseLabel();
+  void parseLabel(bool LeftAlignLabel = false);
   void parseCaseLabel();
   void parseSwitch();
   void parseNamespace();
@@ -120,11 +118,13 @@ private:
   // parses the record as a child block, i.e. if the class declaration is an
   // expression.
   void parseRecord(bool ParseAsExpr = false);
+  void parseObjCMethod();
   void parseObjCProtocolList();
   void parseObjCUntilAtEnd();
   void parseObjCInterfaceOrImplementation();
   bool parseObjCProtocol();
   void parseJavaScriptEs6ImportExport();
+  void parseStatementMacro();
   bool tryToParseLambda();
   bool tryToParseLambdaIntroducer();
   void tryToParseJSFunction();
