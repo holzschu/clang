@@ -1,9 +1,8 @@
 //===----- CGOpenCLRuntime.h - Interface to OpenCL Runtimes -----*- C++ -*-===//
 //
-//                     The LLVM Compiler Infrastructure
-//
-// This file is distributed under the University of Illinois Open Source
-// License. See LICENSE.TXT for details.
+// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
 //===----------------------------------------------------------------------===//
 //
@@ -16,6 +15,7 @@
 #ifndef LLVM_CLANG_LIB_CODEGEN_CGOPENCLRUNTIME_H
 #define LLVM_CLANG_LIB_CODEGEN_CGOPENCLRUNTIME_H
 
+#include "clang/AST/Expr.h"
 #include "clang/AST/Type.h"
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/IR/Type.h"
@@ -68,11 +68,11 @@ public:
 
   llvm::PointerType *getSamplerType(const Type *T);
 
-  // \brief Returns a value which indicates the size in bytes of the pipe
+  // Returns a value which indicates the size in bytes of the pipe
   // element.
   virtual llvm::Value *getPipeElemSize(const Expr *PipeArg);
 
-  // \brief Returns a value which indicates the alignment in bytes of the pipe
+  // Returns a value which indicates the alignment in bytes of the pipe
   // element.
   virtual llvm::Value *getPipeElemAlign(const Expr *PipeArg);
 
@@ -83,7 +83,7 @@ public:
   EnqueuedBlockInfo emitOpenCLEnqueuedBlock(CodeGenFunction &CGF,
                                             const Expr *E);
 
-  /// \brief Record invoke function and block literal emitted during normal
+  /// Record invoke function and block literal emitted during normal
   /// codegen for a block expression. The information is used by
   /// emitOpenCLEnqueuedBlock to emit wrapper kernel.
   ///

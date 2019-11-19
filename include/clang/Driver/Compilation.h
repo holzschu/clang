@@ -1,9 +1,8 @@
 //===- Compilation.h - Compilation Task Data Structure ----------*- C++ -*-===//
 //
-//                     The LLVM Compiler Infrastructure
-//
-// This file is distributed under the University of Illinois Open Source
-// License. See LICENSE.TXT for details.
+// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
 //===----------------------------------------------------------------------===//
 
@@ -121,6 +120,9 @@ class Compilation {
 
   /// Whether an error during the parsing of the input args.
   bool ContainsError;
+
+  /// Whether to keep temporary files regardless of -save-temps.
+  bool ForceKeepTempFiles = false;
 
 public:
   Compilation(const Driver &D, const ToolChain &DefaultToolChain,

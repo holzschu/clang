@@ -1,9 +1,8 @@
 //===- unittest/AST/DeclMatcher.h - AST unit test support ---------------===//
 //
-//                     The LLVM Compiler Infrastructure
-//
-// This file is distributed under the University of Illinois Open Source
-// License. See LICENSE.TXT for details.
+// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
 //===----------------------------------------------------------------------===//
 
@@ -44,15 +43,23 @@ template <typename NodeType>
 using FirstDeclMatcher = DeclMatcher<NodeType, DeclMatcherKind::First>;
 
 template <typename NodeType>
-class DeclCounter : public MatchFinder::MatchCallback {
+class DeclCounterWithPredicate : public MatchFinder::MatchCallback {
+  using UnaryPredicate = std::function<bool(const NodeType *)>;
+  UnaryPredicate Predicate;
   unsigned Count = 0;
   void run(const MatchFinder::MatchResult &Result) override {
-      if(Result.Nodes.getNodeAs<NodeType>("")) {
+    if (auto N = Result.Nodes.getNodeAs<NodeType>("")) {
+      if (Predicate(N))
         ++Count;
-      }
+    }
   }
+
 public:
-  // Returns the number of matched nodes under the tree rooted in `D`.
+  DeclCounterWithPredicate()
+      : Predicate([](const NodeType *) { return true; }) {}
+  DeclCounterWithPredicate(UnaryPredicate P) : Predicate(P) {}
+  // Returns the number of matched nodes which satisfy the predicate under the
+  // tree rooted in `D`.
   template <typename MatcherType>
   unsigned match(const Decl *D, const MatcherType &AMatcher) {
     MatchFinder Finder;
@@ -61,6 +68,9 @@ public:
     return Count;
   }
 };
+
+template <typename NodeType>
+using DeclCounter = DeclCounterWithPredicate<NodeType>;
 
 } // end namespace ast_matchers
 } // end namespace clang

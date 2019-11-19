@@ -1,24 +1,25 @@
 //===- FrontendOptions.h ----------------------------------------*- C++ -*-===//
 //
-//                     The LLVM Compiler Infrastructure
-//
-// This file is distributed under the University of Illinois Open Source
-// License. See LICENSE.TXT for details.
+// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
 //===----------------------------------------------------------------------===//
 
 #ifndef LLVM_CLANG_FRONTEND_FRONTENDOPTIONS_H
 #define LLVM_CLANG_FRONTEND_FRONTENDOPTIONS_H
 
+#include "clang/AST/ASTDumperUtils.h"
+#include "clang/Basic/LangStandard.h"
 #include "clang/Frontend/CommandLineSourceLoc.h"
-#include "clang/Serialization/ModuleFileExtension.h"
 #include "clang/Sema/CodeCompleteOptions.h"
+#include "clang/Serialization/ModuleFileExtension.h"
 #include "llvm/ADT/StringRef.h"
 #include <cassert>
 #include <memory>
 #include <string>
-#include <vector>
 #include <unordered_map>
+#include <vector>
 
 namespace llvm {
 
@@ -42,6 +43,9 @@ enum ActionKind {
 
   /// Parse ASTs and view them in Graphviz.
   ASTView,
+
+  /// Dump the compiler configuration.
+  DumpCompilerOptions,
 
   /// Dump out raw tokens.
   DumpRawTokens,
@@ -79,11 +83,14 @@ enum ActionKind {
   /// Generate pre-compiled module from a C++ module interface file.
   GenerateModuleInterface,
 
+  /// Generate pre-compiled module from a set of header files.
+  GenerateHeaderModule,
+
   /// Generate pre-compiled header.
   GeneratePCH,
 
-  /// Generate pre-tokenized header.
-  GeneratePTH,
+  /// Generate Interface Stub Files.
+  GenerateInterfaceIfsExpV1,
 
   /// Only execute frontend initialization.
   InitOnly,
@@ -99,9 +106,6 @@ enum ActionKind {
 
   /// Run a plugin action, \see ActionName.
   PluginAction,
-
-  /// Print DeclContext and their Decls.
-  PrintDeclContext,
 
   /// Print the "preamble" of the input file
   PrintPreamble,
@@ -128,7 +132,10 @@ enum ActionKind {
   MigrateSource,
 
   /// Just lex, no output.
-  RunPreprocessorOnly
+  RunPreprocessorOnly,
+
+  /// Print the output of the dependency directives source minimizer.
+  PrintDependencyDirectivesSourceMinimizerOutput
 };
 
 } // namespace frontend
@@ -136,35 +143,11 @@ enum ActionKind {
 /// The kind of a file that we've been handed as an input.
 class InputKind {
 private:
-  unsigned Lang : 4;
+  Language Lang;
   unsigned Fmt : 3;
   unsigned Preprocessed : 1;
 
 public:
-  /// The language for the input, used to select and validate the language
-  /// standard and possible actions.
-  enum Language {
-    Unknown,
-
-    /// Assembly: we accept this only so that we can preprocess it.
-    Asm,
-
-    /// LLVM IR: we accept this so that we can run the optimizer on it,
-    /// and compile it to assembly or object code.
-    LLVM_IR,
-
-    ///@{ Languages that the frontend can parse and compile.
-    C,
-    CXX,
-    ObjC,
-    ObjCXX,
-    OpenCL,
-    CUDA,
-    RenderScript,
-    HIP,
-    ///@}
-  };
-
   /// The input file format.
   enum Format {
     Source,
@@ -172,7 +155,7 @@ public:
     Precompiled
   };
 
-  constexpr InputKind(Language L = Unknown, Format F = Source,
+  constexpr InputKind(Language L = Language::Unknown, Format F = Source,
                       bool PP = false)
       : Lang(L), Fmt(F), Preprocessed(PP) {}
 
@@ -181,10 +164,12 @@ public:
   bool isPreprocessed() const { return Preprocessed; }
 
   /// Is the input kind fully-unknown?
-  bool isUnknown() const { return Lang == Unknown && Fmt == Source; }
+  bool isUnknown() const { return Lang == Language::Unknown && Fmt == Source; }
 
   /// Is the language of the input some dialect of Objective-C?
-  bool isObjectiveC() const { return Lang == ObjC || Lang == ObjCXX; }
+  bool isObjectiveC() const {
+    return Lang == Language::ObjC || Lang == Language::ObjCXX;
+  }
 
   InputKind getPreprocessed() const {
     return InputKind(getLanguage(), getFormat(), true);
@@ -195,27 +180,27 @@ public:
   }
 };
 
-/// \brief An input file for the front end.
+/// An input file for the front end.
 class FrontendInputFile {
-  /// \brief The file name, or "-" to read from standard input.
+  /// The file name, or "-" to read from standard input.
   std::string File;
 
   /// The input, if it comes from a buffer rather than a file. This object
   /// does not own the buffer, and the caller is responsible for ensuring
   /// that it outlives any users.
-  llvm::MemoryBuffer *Buffer = nullptr;
+  const llvm::MemoryBuffer *Buffer = nullptr;
 
-  /// \brief The kind of input, e.g., C source, AST file, LLVM IR.
+  /// The kind of input, e.g., C source, AST file, LLVM IR.
   InputKind Kind;
 
-  /// \brief Whether we're dealing with a 'system' input (vs. a 'user' input).
+  /// Whether we're dealing with a 'system' input (vs. a 'user' input).
   bool IsSystem = false;
 
 public:
   FrontendInputFile() = default;
   FrontendInputFile(StringRef File, InputKind Kind, bool IsSystem = false)
       : File(File.str()), Kind(Kind), IsSystem(IsSystem) {}
-  FrontendInputFile(llvm::MemoryBuffer *Buffer, InputKind Kind,
+  FrontendInputFile(const llvm::MemoryBuffer *Buffer, InputKind Kind,
                     bool IsSystem = false)
       : Buffer(Buffer), Kind(Kind), IsSystem(IsSystem) {}
 
@@ -232,7 +217,7 @@ public:
     return File;
   }
 
-  llvm::MemoryBuffer *getBuffer() const {
+  const llvm::MemoryBuffer *getBuffer() const {
     assert(isBuffer());
     return Buffer;
   }
@@ -256,6 +241,12 @@ public:
 
   /// Show timers for individual actions.
   unsigned ShowTimers : 1;
+
+  /// print the supported cpus for the current target
+  unsigned PrintSupportedCPUs : 1;
+
+  /// Output time trace profile.
+  unsigned TimeTrace : 1;
 
   /// Show the -version text.
   unsigned ShowVersion : 1;
@@ -305,6 +296,9 @@ public:
 
   CodeCompleteOptions CodeCompleteOpts;
 
+  /// Specifies the output format of the AST.
+  ASTDumpOutputFormat ASTDumpFormat = ADOF_Default;
+
   enum {
     ARCMT_None,
     ARCMT_Check,
@@ -315,46 +309,46 @@ public:
   enum {
     ObjCMT_None = 0,
 
-    /// \brief Enable migration to modern ObjC literals.
+    /// Enable migration to modern ObjC literals.
     ObjCMT_Literals = 0x1,
 
-    /// \brief Enable migration to modern ObjC subscripting.
+    /// Enable migration to modern ObjC subscripting.
     ObjCMT_Subscripting = 0x2,
 
-    /// \brief Enable migration to modern ObjC readonly property.
+    /// Enable migration to modern ObjC readonly property.
     ObjCMT_ReadonlyProperty = 0x4,
 
-    /// \brief Enable migration to modern ObjC readwrite property.
+    /// Enable migration to modern ObjC readwrite property.
     ObjCMT_ReadwriteProperty = 0x8,
 
-    /// \brief Enable migration to modern ObjC property.
+    /// Enable migration to modern ObjC property.
     ObjCMT_Property = (ObjCMT_ReadonlyProperty | ObjCMT_ReadwriteProperty),
 
-    /// \brief Enable annotation of ObjCMethods of all kinds.
+    /// Enable annotation of ObjCMethods of all kinds.
     ObjCMT_Annotation = 0x10,
 
-    /// \brief Enable migration of ObjC methods to 'instancetype'.
+    /// Enable migration of ObjC methods to 'instancetype'.
     ObjCMT_Instancetype = 0x20,
 
-    /// \brief Enable migration to NS_ENUM/NS_OPTIONS macros.
+    /// Enable migration to NS_ENUM/NS_OPTIONS macros.
     ObjCMT_NsMacros = 0x40,
 
-    /// \brief Enable migration to add conforming protocols.
+    /// Enable migration to add conforming protocols.
     ObjCMT_ProtocolConformance = 0x80,
 
-    /// \brief prefer 'atomic' property over 'nonatomic'.
+    /// prefer 'atomic' property over 'nonatomic'.
     ObjCMT_AtomicProperty = 0x100,
 
-    /// \brief annotate property with NS_RETURNS_INNER_POINTER
+    /// annotate property with NS_RETURNS_INNER_POINTER
     ObjCMT_ReturnsInnerPointerProperty = 0x200,
 
-    /// \brief use NS_NONATOMIC_IOSONLY for property 'atomic' attribute
+    /// use NS_NONATOMIC_IOSONLY for property 'atomic' attribute
     ObjCMT_NsAtomicIOSOnlyProperty = 0x400,
 
-    /// \brief Enable inferring NS_DESIGNATED_INITIALIZER for ObjC methods.
+    /// Enable inferring NS_DESIGNATED_INITIALIZER for ObjC methods.
     ObjCMT_DesignatedInitializer = 0x800,
 
-    /// \brief Enable converting setter/getter expressions to property-dot syntx.
+    /// Enable converting setter/getter expressions to property-dot syntx.
     ObjCMT_PropertyDotSyntax = 0x1000,
 
     ObjCMT_MigrateDecls = (ObjCMT_ReadonlyProperty | ObjCMT_ReadwriteProperty |
@@ -408,52 +402,52 @@ public:
   /// The list of module file extensions.
   std::vector<std::shared_ptr<ModuleFileExtension>> ModuleFileExtensions;
 
-  /// \brief The list of module map files to load before processing the input.
+  /// The list of module map files to load before processing the input.
   std::vector<std::string> ModuleMapFiles;
 
-  /// \brief The list of additional prebuilt module files to load before
+  /// The list of additional prebuilt module files to load before
   /// processing the input.
   std::vector<std::string> ModuleFiles;
 
-  /// \brief The list of files to embed into the compiled module file.
+  /// The list of files to embed into the compiled module file.
   std::vector<std::string> ModulesEmbedFiles;
 
-  /// \brief The list of AST files to merge.
+  /// The list of AST files to merge.
   std::vector<std::string> ASTMergeFiles;
 
-  /// \brief A list of arguments to forward to LLVM's option processing; this
+  /// A list of arguments to forward to LLVM's option processing; this
   /// should only be used for debugging and experimental features.
   std::vector<std::string> LLVMArgs;
 
-  /// \brief File name of the file that will provide record layouts
+  /// File name of the file that will provide record layouts
   /// (in the format produced by -fdump-record-layouts).
   std::string OverrideRecordLayoutsFile;
 
-  /// \brief Auxiliary triple for CUDA compilation.
+  /// Auxiliary triple for CUDA compilation.
   std::string AuxTriple;
-
-  /// \brief If non-empty, search the pch input file as if it was a header
-  /// included by this file.
-  std::string FindPchSource;
 
   /// Filename to write statistics to.
   std::string StatsFile;
 
+  /// Minimum time granularity (in microseconds) traced by time profiler.
+  unsigned TimeTraceGranularity;
+
 public:
   FrontendOptions()
       : DisableFree(false), RelocatablePCH(false), ShowHelp(false),
-        ShowStats(false), ShowTimers(false), ShowVersion(false),
-        FixWhatYouCan(false), FixOnlyWarnings(false), FixAndRecompile(false),
-        FixToTemporaries(false), ARCMTMigrateEmitARCErrors(false),
-        SkipFunctionBodies(false), UseGlobalModuleIndex(true),
-        GenerateGlobalModuleIndex(true), ASTDumpDecls(false),
-        ASTDumpLookups(false), BuildingImplicitModule(false),
-        ModulesEmbedAllFiles(false), IncludeTimestamps(true) {}
+        ShowStats(false), ShowTimers(false), TimeTrace(false),
+        ShowVersion(false), FixWhatYouCan(false), FixOnlyWarnings(false),
+        FixAndRecompile(false), FixToTemporaries(false),
+        ARCMTMigrateEmitARCErrors(false), SkipFunctionBodies(false),
+        UseGlobalModuleIndex(true), GenerateGlobalModuleIndex(true),
+        ASTDumpDecls(false), ASTDumpLookups(false),
+        BuildingImplicitModule(false), ModulesEmbedAllFiles(false),
+        IncludeTimestamps(true), TimeTraceGranularity(500) {}
 
   /// getInputKindForExtension - Return the appropriate input kind for a file
-  /// extension. For example, "c" would return InputKind::C.
+  /// extension. For example, "c" would return Language::C.
   ///
-  /// \return The input kind for the extension, or InputKind::Unknown if the
+  /// \return The input kind for the extension, or Language::Unknown if the
   /// extension is not recognized.
   static InputKind getInputKindForExtension(StringRef Extension);
 };

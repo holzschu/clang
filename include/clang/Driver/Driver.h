@@ -1,9 +1,8 @@
 //===--- Driver.h - Clang GCC Compatible Driver -----------------*- C++ -*-===//
 //
-//                     The LLVM Compiler Infrastructure
-//
-// This file is distributed under the University of Illinois Open Source
-// License. See LICENSE.TXT for details.
+// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
 //===----------------------------------------------------------------------===//
 
@@ -13,12 +12,14 @@
 #include "clang/Basic/Diagnostic.h"
 #include "clang/Basic/LLVM.h"
 #include "clang/Driver/Action.h"
+#include "clang/Driver/Options.h"
 #include "clang/Driver/Phases.h"
 #include "clang/Driver/ToolChain.h"
 #include "clang/Driver/Types.h"
 #include "clang/Driver/Util.h"
 #include "llvm/ADT/StringMap.h"
 #include "llvm/ADT/StringRef.h"
+#include "llvm/Option/Arg.h"
 #include "llvm/Option/ArgList.h"
 #include "llvm/Support/StringSaver.h"
 
@@ -28,13 +29,12 @@
 
 namespace llvm {
 class Triple;
-}
-
-namespace clang {
-
 namespace vfs {
 class FileSystem;
 }
+} // namespace llvm
+
+namespace clang {
 
 namespace driver {
 
@@ -57,11 +57,9 @@ enum LTOKind {
 /// Driver - Encapsulate logic for constructing compilation processes
 /// from a set of gcc-driver-like command line arguments.
 class Driver {
-  std::unique_ptr<llvm::opt::OptTable> Opts;
-
   DiagnosticsEngine &Diags;
 
-  IntrusiveRefCntPtr<vfs::FileSystem> VFS;
+  IntrusiveRefCntPtr<llvm::vfs::FileSystem> VFS;
 
   enum DriverMode {
     GCCMode,
@@ -202,8 +200,8 @@ public:
   unsigned CCGenDiagnostics : 1;
 
 private:
-  /// Default target triple.
-  std::string DefaultTargetTriple;
+  /// Raw target triple.
+  std::string TargetTriple;
 
   /// Name to use when invoking gcc/g++.
   std::string CCCGenericGCCName;
@@ -228,9 +226,6 @@ private:
   unsigned CheckInputsExist : 1;
 
 public:
-  /// Use lazy precompiled headers for PCH support.
-  unsigned CCCUsePCH : 1;
-
   /// Force clang to emit reproducer for driver invocation. This is enabled
   /// indirectly by setting FORCE_CLANG_DIAGNOSTICS_CRASH environment variable
   /// or when using the -gen-reproducer driver flag.
@@ -240,10 +235,7 @@ private:
   /// Certain options suppress the 'no input files' warning.
   unsigned SuppressMissingInputWarning : 1;
 
-  std::list<std::string> TempFiles;
-  std::list<std::string> ResultFiles;
-
-  /// \brief Cache of all the ToolChains in use by the driver.
+  /// Cache of all the ToolChains in use by the driver.
   ///
   /// This maps from the string representation of a triple to a ToolChain
   /// created targeting that triple. The driver owns all the ToolChain objects
@@ -256,10 +248,18 @@ private:
   llvm::opt::DerivedArgList *
   TranslateInputArgs(const llvm::opt::InputArgList &Args) const;
 
-  // getFinalPhase - Determine which compilation mode we are in and record 
+  // getFinalPhase - Determine which compilation mode we are in and record
   // which option we used to determine the final phase.
+  // TODO: Much of what getFinalPhase returns are not actually true compiler
+  //       modes. Fold this functionality into Types::getCompilationPhases and
+  //       handleArguments.
   phases::ID getFinalPhase(const llvm::opt::DerivedArgList &DAL,
                            llvm::opt::Arg **FinalPhaseArg = nullptr) const;
+
+  // handleArguments - All code related to claiming and printing diagnostics
+  // related to arguments to the driver are done here.
+  void handleArguments(Compilation &C, llvm::opt::DerivedArgList &Args,
+                       const InputList &Inputs, ActionList &Actions) const;
 
   // Before executing jobs, sets up response files for commands that need them.
   void setUpResponseFiles(Compilation &C, Command &Cmd);
@@ -267,7 +267,7 @@ private:
   void generatePrefixedToolNames(StringRef Tool, const ToolChain &TC,
                                  SmallVectorImpl<std::string> &Names) const;
 
-  /// \brief Find the appropriate .crash diagonostic file for the child crash
+  /// Find the appropriate .crash diagonostic file for the child crash
   /// under this driver and copy it out to a temporary destination with the
   /// other reproducer related files (.sh, .cache, etc). If not found, suggest a
   /// directory for the user to look at.
@@ -282,9 +282,15 @@ private:
                               SmallString<128> &CrashDiagDir);
 
 public:
-  Driver(StringRef ClangExecutable, StringRef DefaultTargetTriple,
+
+  /// Takes the path to a binary that's either in bin/ or lib/ and returns
+  /// the path to clang's resource directory.
+  static std::string GetResourcesPath(StringRef BinaryPath,
+                                      StringRef CustomResourceDir = "");
+
+  Driver(StringRef ClangExecutable, StringRef TargetTriple,
          DiagnosticsEngine &Diags,
-         IntrusiveRefCntPtr<vfs::FileSystem> VFS = nullptr);
+         IntrusiveRefCntPtr<llvm::vfs::FileSystem> VFS = nullptr);
 
   /// @name Accessors
   /// @{
@@ -294,11 +300,11 @@ public:
 
   const std::string &getConfigFile() const { return ConfigFile; }
 
-  const llvm::opt::OptTable &getOpts() const { return *Opts; }
+  const llvm::opt::OptTable &getOpts() const { return getDriverOptTable(); }
 
   const DiagnosticsEngine &getDiags() const { return Diags; }
 
-  vfs::FileSystem &getVFS() const { return *VFS; }
+  llvm::vfs::FileSystem &getVFS() const { return *VFS; }
 
   bool getCheckInputsExist() const { return CheckInputsExist; }
 
@@ -309,12 +315,14 @@ public:
   const std::string &getTitle() { return DriverTitle; }
   void setTitle(std::string Value) { DriverTitle = std::move(Value); }
 
-  /// \brief Get the path to the main clang executable.
+  std::string getTargetTriple() const { return TargetTriple; }
+
+  /// Get the path to the main clang executable.
   const char *getClangProgramPath() const {
     return ClangExecutable.c_str();
   }
 
-  /// \brief Get the path to where the clang executable was installed.
+  /// Get the path to where the clang executable was installed.
   const char *getInstalledDir() const {
     if (!InstalledDir.empty())
       return InstalledDir.c_str();
@@ -361,14 +369,15 @@ public:
   /// ParseArgStrings - Parse the given list of strings into an
   /// ArgList.
   llvm::opt::InputArgList ParseArgStrings(ArrayRef<const char *> Args,
+                                          bool IsClCompatMode,
                                           bool &ContainsError);
 
-  /// BuildInputs - Construct the list of inputs and their types from 
+  /// BuildInputs - Construct the list of inputs and their types from
   /// the given arguments.
   ///
   /// \param TC - The default host tool chain.
   /// \param Args - The input arguments.
-  /// \param Inputs - The list to store the resulting compilation 
+  /// \param Inputs - The list to store the resulting compilation
   /// inputs onto.
   void BuildInputs(const ToolChain &TC, llvm::opt::DerivedArgList &Args,
                    InputList &Inputs) const;
@@ -389,6 +398,14 @@ public:
   /// \param TC - The default host tool chain.
   void BuildUniversalActions(Compilation &C, const ToolChain &TC,
                              const InputList &BAInputs) const;
+
+  /// Check that the file referenced by Value exists. If it doesn't,
+  /// issue a diagnostic and return false.
+  /// If TypoCorrect is true and the file does not exist, see if it looks
+  /// like a likely typo for a flag and if so print a "did you mean" blurb.
+  bool DiagnoseInputExistence(const llvm::opt::DerivedArgList &Args,
+                              StringRef Value, types::ID Ty,
+                              bool TypoCorrect) const;
 
   /// BuildJobs - Bind actions to concrete tools and translate
   /// arguments to form the list of jobs to run.
@@ -491,7 +508,7 @@ public:
   /// \param JA - The action of interest.
   /// \param BaseInput - The original input file that this action was
   /// triggered by.
-  /// \param BoundArch - The bound architecture. 
+  /// \param BoundArch - The bound architecture.
   /// \param AtTopLevel - Whether this is a "top-level" action.
   /// \param MultipleArchs - Whether multiple -arch options were supplied.
   /// \param NormalizedTriple - The normalized triple of the relevant target.
@@ -500,11 +517,15 @@ public:
                                  bool AtTopLevel, bool MultipleArchs,
                                  StringRef NormalizedTriple) const;
 
-  /// GetTemporaryPath - Return the pathname of a temporary file to use 
+  /// GetTemporaryPath - Return the pathname of a temporary file to use
   /// as part of compilation; the file will have the given prefix and suffix.
   ///
   /// GCC goes to extra lengths here to be a bit more robust.
   std::string GetTemporaryPath(StringRef Prefix, StringRef Suffix) const;
+
+  /// GetTemporaryDirectory - Return the pathname of a temporary directory to
+  /// use as part of compilation; the directory will have the given prefix.
+  std::string GetTemporaryDirectory(StringRef Prefix) const;
 
   /// Return the pathname of the pch file in clang-cl mode.
   std::string GetClPchPath(Compilation &C, StringRef BaseName) const;
@@ -540,7 +561,7 @@ private:
   /// compilation based on which -f(no-)?lto(=.*)? option occurs last.
   void setLTOMode(const llvm::opt::ArgList &Args);
 
-  /// \brief Retrieves a ToolChain for a particular \p Target triple.
+  /// Retrieves a ToolChain for a particular \p Target triple.
   ///
   /// Will cache ToolChains for the life of the driver object, and create them
   /// on-demand.
@@ -549,9 +570,9 @@ private:
 
   /// @}
 
-  /// \brief Get bitmasks for which option flags to include and exclude based on
+  /// Get bitmasks for which option flags to include and exclude based on
   /// the driver mode.
-  std::pair<unsigned, unsigned> getIncludeExcludeOptionFlagMasks() const;
+  std::pair<unsigned, unsigned> getIncludeExcludeOptionFlagMasks(bool IsClCompatMode) const;
 
   /// Helper used in BuildJobsForAction.  Doesn't use the cache when building
   /// jobs specifically for the given action, but will use the cache when

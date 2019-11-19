@@ -1,9 +1,8 @@
 //===- CoroutineStmtBuilder.h - Implicit coroutine stmt builder -*- C++ -*-===//
 //
-//                     The LLVM Compiler Infrastructure
-//
-// This file is distributed under the University of Illinois Open Source
-// License. See LICENSE.TXT for details.
+// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //===----------------------------------------------------------------------===//
 //
 //  This file defines CoroutineStmtBuilder, a class for building the implicit
@@ -33,16 +32,16 @@ class CoroutineStmtBuilder : public CoroutineBodyStmt::CtorArgs {
   CXXRecordDecl *PromiseRecordDecl = nullptr;
 
 public:
-  /// \brief Construct a CoroutineStmtBuilder and initialize the promise
+  /// Construct a CoroutineStmtBuilder and initialize the promise
   /// statement and initial/final suspends from the FunctionScopeInfo.
   CoroutineStmtBuilder(Sema &S, FunctionDecl &FD, sema::FunctionScopeInfo &Fn,
                        Stmt *Body);
 
-  /// \brief Build the coroutine body statements, including the
+  /// Build the coroutine body statements, including the
   /// "promise dependent" statements when the promise type is not dependent.
   bool buildStatements();
 
-  /// \brief Build the coroutine body statements that require a non-dependent
+  /// Build the coroutine body statements that require a non-dependent
   /// promise type in order to construct.
   ///
   /// For example different new/delete overloads are selected depending on

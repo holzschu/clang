@@ -90,25 +90,25 @@ void foo(double *d, float f, float *fp, long double *l, int *i, const char *c) {
 
   __builtin_nan(c);        __builtin_nanf(c);       __builtin_nanl(c); __builtin_nanf128(c);
 
-// NO__ERRNO: declare double @nan(i8*) [[READNONE]]
-// NO__ERRNO: declare float @nanf(i8*) [[READNONE]]
-// NO__ERRNO: declare x86_fp80 @nanl(i8*) [[READNONE]]
-// NO__ERRNO: declare fp128 @nanf128(i8*) [[READNONE]]
-// HAS_ERRNO: declare double @nan(i8*) [[READNONE:#[0-9]+]]
-// HAS_ERRNO: declare float @nanf(i8*) [[READNONE]]
-// HAS_ERRNO: declare x86_fp80 @nanl(i8*) [[READNONE]]
-// HAS_ERRNO: declare fp128 @nanf128(i8*) [[READNONE]]
+// NO__ERRNO: declare double @nan(i8*) [[PURE:#[0-9]+]]
+// NO__ERRNO: declare float @nanf(i8*) [[PURE]]
+// NO__ERRNO: declare x86_fp80 @nanl(i8*) [[PURE]]
+// NO__ERRNO: declare fp128 @nanf128(i8*) [[PURE]]
+// HAS_ERRNO: declare double @nan(i8*) [[PURE:#[0-9]+]]
+// HAS_ERRNO: declare float @nanf(i8*) [[PURE]]
+// HAS_ERRNO: declare x86_fp80 @nanl(i8*) [[PURE]]
+// HAS_ERRNO: declare fp128 @nanf128(i8*) [[PURE]]
 
   __builtin_nans(c);        __builtin_nansf(c);       __builtin_nansl(c); __builtin_nansf128(c);
 
-// NO__ERRNO: declare double @nans(i8*) [[READNONE]]
-// NO__ERRNO: declare float @nansf(i8*) [[READNONE]]
-// NO__ERRNO: declare x86_fp80 @nansl(i8*) [[READNONE]]
-// NO__ERRNO: declare fp128 @nansf128(i8*) [[READNONE]]
-// HAS_ERRNO: declare double @nans(i8*) [[READNONE]]
-// HAS_ERRNO: declare float @nansf(i8*) [[READNONE]]
-// HAS_ERRNO: declare x86_fp80 @nansl(i8*) [[READNONE]]
-// HAS_ERRNO: declare fp128 @nansf128(i8*) [[READNONE]]
+// NO__ERRNO: declare double @nans(i8*) [[PURE]]
+// NO__ERRNO: declare float @nansf(i8*) [[PURE]]
+// NO__ERRNO: declare x86_fp80 @nansl(i8*) [[PURE]]
+// NO__ERRNO: declare fp128 @nansf128(i8*) [[PURE]]
+// HAS_ERRNO: declare double @nans(i8*) [[PURE]]
+// HAS_ERRNO: declare float @nansf(i8*) [[PURE]]
+// HAS_ERRNO: declare x86_fp80 @nansl(i8*) [[PURE]]
+// HAS_ERRNO: declare fp128 @nansf128(i8*) [[PURE]]
 
   __builtin_pow(f,f);        __builtin_powf(f,f);       __builtin_powl(f,f);
 
@@ -188,7 +188,7 @@ void foo(double *d, float f, float *fp, long double *l, int *i, const char *c) {
 // NO__ERRNO: declare double @cbrt(double) [[READNONE]]
 // NO__ERRNO: declare float @cbrtf(float) [[READNONE]]
 // NO__ERRNO: declare x86_fp80 @cbrtl(x86_fp80) [[READNONE]]
-// HAS_ERRNO: declare double @cbrt(double) [[READNONE]]
+// HAS_ERRNO: declare double @cbrt(double) [[READNONE:#[0-9]+]]
 // HAS_ERRNO: declare float @cbrtf(float) [[READNONE]]
 // HAS_ERRNO: declare x86_fp80 @cbrtl(x86_fp80) [[READNONE]]
 
@@ -353,18 +353,18 @@ void foo(double *d, float f, float *fp, long double *l, int *i, const char *c) {
 
   __builtin_llrint(f);     __builtin_llrintf(f);    __builtin_llrintl(f);
 
-// NO__ERRNO: declare i64 @llrint(double) [[READNONE]]
-// NO__ERRNO: declare i64 @llrintf(float) [[READNONE]]
-// NO__ERRNO: declare i64 @llrintl(x86_fp80) [[READNONE]]
+// NO__ERRNO: declare i64 @llvm.llrint.i64.f64(double) [[READNONE_INTRINSIC]]
+// NO__ERRNO: declare i64 @llvm.llrint.i64.f32(float) [[READNONE_INTRINSIC]]
+// NO__ERRNO: declare i64 @llvm.llrint.i64.f80(x86_fp80) [[READNONE_INTRINSIC]]
 // HAS_ERRNO: declare i64 @llrint(double) [[NOT_READNONE]]
 // HAS_ERRNO: declare i64 @llrintf(float) [[NOT_READNONE]]
 // HAS_ERRNO: declare i64 @llrintl(x86_fp80) [[NOT_READNONE]]
 
   __builtin_llround(f);    __builtin_llroundf(f);   __builtin_llroundl(f);
 
-// NO__ERRNO: declare i64 @llround(double) [[READNONE]]
-// NO__ERRNO: declare i64 @llroundf(float) [[READNONE]]
-// NO__ERRNO: declare i64 @llroundl(x86_fp80) [[READNONE]]
+// NO__ERRNO: declare i64 @llvm.llround.i64.f64(double) [[READNONE_INTRINSIC]]
+// NO__ERRNO: declare i64 @llvm.llround.i64.f32(float) [[READNONE_INTRINSIC]]
+// NO__ERRNO: declare i64 @llvm.llround.i64.f80(x86_fp80) [[READNONE_INTRINSIC]]
 // HAS_ERRNO: declare i64 @llround(double) [[NOT_READNONE]]
 // HAS_ERRNO: declare i64 @llroundf(float) [[NOT_READNONE]]
 // HAS_ERRNO: declare i64 @llroundl(x86_fp80) [[NOT_READNONE]]
@@ -416,18 +416,18 @@ void foo(double *d, float f, float *fp, long double *l, int *i, const char *c) {
 
   __builtin_lrint(f);      __builtin_lrintf(f);     __builtin_lrintl(f);
 
-// NO__ERRNO: declare i64 @lrint(double) [[READNONE]]
-// NO__ERRNO: declare i64 @lrintf(float) [[READNONE]]
-// NO__ERRNO: declare i64 @lrintl(x86_fp80) [[READNONE]]
+// NO__ERRNO: declare i64 @llvm.lrint.i64.f64(double) [[READNONE_INTRINSIC]]
+// NO__ERRNO: declare i64 @llvm.lrint.i64.f32(float) [[READNONE_INTRINSIC]]
+// NO__ERRNO: declare i64 @llvm.lrint.i64.f80(x86_fp80) [[READNONE_INTRINSIC]]
 // HAS_ERRNO: declare i64 @lrint(double) [[NOT_READNONE]]
 // HAS_ERRNO: declare i64 @lrintf(float) [[NOT_READNONE]]
 // HAS_ERRNO: declare i64 @lrintl(x86_fp80) [[NOT_READNONE]]
 
   __builtin_lround(f);     __builtin_lroundf(f);    __builtin_lroundl(f);
 
-// NO__ERRNO: declare i64 @lround(double) [[READNONE]]
-// NO__ERRNO: declare i64 @lroundf(float) [[READNONE]]
-// NO__ERRNO: declare i64 @lroundl(x86_fp80) [[READNONE]]
+// NO__ERRNO: declare i64 @llvm.lround.i64.f64(double) [[READNONE_INTRINSIC]]
+// NO__ERRNO: declare i64 @llvm.lround.i64.f32(float) [[READNONE_INTRINSIC]]
+// NO__ERRNO: declare i64 @llvm.lround.i64.f80(x86_fp80) [[READNONE_INTRINSIC]]
 // HAS_ERRNO: declare i64 @lround(double) [[NOT_READNONE]]
 // HAS_ERRNO: declare i64 @lroundf(float) [[NOT_READNONE]]
 // HAS_ERRNO: declare i64 @lroundl(x86_fp80) [[NOT_READNONE]]
@@ -581,9 +581,11 @@ void foo(double *d, float f, float *fp, long double *l, int *i, const char *c) {
 // NO__ERRNO: attributes [[READNONE]] = { {{.*}}readnone{{.*}} }
 // NO__ERRNO: attributes [[READNONE_INTRINSIC]] = { {{.*}}readnone{{.*}} }
 // NO__ERRNO: attributes [[NOT_READNONE]] = { nounwind "correctly{{.*}} }
+// NO__ERRNO: attributes [[PURE]] = { {{.*}}readonly{{.*}} }
 
 // HAS_ERRNO: attributes [[NOT_READNONE]] = { nounwind "correctly{{.*}} }
 // HAS_ERRNO: attributes [[READNONE_INTRINSIC]] = { {{.*}}readnone{{.*}} }
+// HAS_ERRNO: attributes [[PURE]] = { {{.*}}readonly{{.*}} }
 // HAS_ERRNO: attributes [[READNONE]] = { {{.*}}readnone{{.*}} }
 
 // HAS_ERRNO_GNU: attributes [[READNONE_INTRINSIC]] = { {{.*}}readnone{{.*}} }
