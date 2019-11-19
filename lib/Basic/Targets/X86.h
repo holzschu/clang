@@ -1,9 +1,8 @@
 //===--- X86.h - Declare X86 target feature support -------------*- C++ -*-===//
 //
-//                     The LLVM Compiler Infrastructure
-//
-// This file is distributed under the University of Illinois Open Source
-// License. See LICENSE.TXT for details.
+// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
 //===----------------------------------------------------------------------===//
 //
@@ -69,6 +68,7 @@ class LLVM_LIBRARY_VISIBILITY X86TargetInfo : public TargetInfo {
   bool HasAVX512CD = false;
   bool HasAVX512VPOPCNTDQ = false;
   bool HasAVX512VNNI = false;
+  bool HasAVX512BF16 = false;
   bool HasAVX512ER = false;
   bool HasAVX512PF = false;
   bool HasAVX512DQ = false;
@@ -78,11 +78,11 @@ class LLVM_LIBRARY_VISIBILITY X86TargetInfo : public TargetInfo {
   bool HasAVX512VBMI = false;
   bool HasAVX512VBMI2 = false;
   bool HasAVX512IFMA = false;
+  bool HasAVX512VP2INTERSECT = false;
   bool HasSHA = false;
-  bool HasMPX = false;
   bool HasSHSTK = false;
-  bool HasIBT = false;
   bool HasSGX = false;
+  bool HasCX8 = false;
   bool HasCX16 = false;
   bool HasFXSR = false;
   bool HasXSAVE = false;
@@ -92,20 +92,25 @@ class LLVM_LIBRARY_VISIBILITY X86TargetInfo : public TargetInfo {
   bool HasMWAITX = false;
   bool HasCLZERO = false;
   bool HasCLDEMOTE = false;
+  bool HasPCONFIG = false;
   bool HasPKU = false;
   bool HasCLFLUSHOPT = false;
   bool HasCLWB = false;
   bool HasMOVBE = false;
   bool HasPREFETCHWT1 = false;
   bool HasRDPID = false;
-  bool HasRetpoline = false;
   bool HasRetpolineExternalThunk = false;
   bool HasLAHFSAHF = false;
   bool HasWBNOINVD = false;
   bool HasWAITPKG = false;
+  bool HasMOVDIRI = false;
+  bool HasMOVDIR64B = false;
+  bool HasPTWRITE = false;
+  bool HasINVPCID = false;
+  bool HasENQCMD = false;
 
 protected:
-  /// \brief Enumeration of all of the X86 CPUs supported by Clang.
+  /// Enumeration of all of the X86 CPUs supported by Clang.
   ///
   /// Each enumeration represents a particular CPU supported by Clang. These
   /// loosely correspond to the options passed to '-march' or '-mtune' flags.
@@ -119,8 +124,6 @@ protected:
 
   CPUKind getCPUKind(StringRef CPU) const;
 
-  std::string getCPUKindCanonicalName(CPUKind Kind) const;
-
   enum FPMathKind { FP_Default, FP_SSE, FP_387 } FPMath = FP_Default;
 
 public:
@@ -128,7 +131,11 @@ public:
       : TargetInfo(Triple) {
     LongDoubleFormat = &llvm::APFloat::x87DoubleExtended();
   }
-  
+
+  const char *getLongDoubleMangling() const override {
+    return LongDoubleFormat == &llvm::APFloat::IEEEquad() ? "g" : "e";
+  }
+
   unsigned getFloatEvalMethod() const override {
     // X87 evaluates with 80 bits "long double" precision.
     return SSELevel == NoSSE ? 2 : 0;
@@ -145,6 +152,14 @@ public:
   bool validateCpuSupports(StringRef Name) const override;
 
   bool validateCpuIs(StringRef Name) const override;
+
+  bool validateCPUSpecificCPUDispatch(StringRef Name) const override;
+
+  char CPUSpecificManglingCharacter(StringRef Name) const override;
+
+  void getCPUSpecificCPUDispatchFeatures(
+      StringRef Name,
+      llvm::SmallVectorImpl<StringRef> &Features) const override;
 
   bool validateAsmConstraint(const char *&Name,
                              TargetInfo::ConstraintInfo &info) const override;
@@ -167,10 +182,15 @@ public:
   bool validateInputSize(StringRef Constraint, unsigned Size) const override;
 
   virtual bool
-  checkCFProtectionReturnSupported(DiagnosticsEngine &Diags) const override;
+  checkCFProtectionReturnSupported(DiagnosticsEngine &Diags) const override {
+    return true;
+  };
 
   virtual bool
-  checkCFProtectionBranchSupported(DiagnosticsEngine &Diags) const override;
+  checkCFProtectionBranchSupported(DiagnosticsEngine &Diags) const override {
+    return true;
+  };
+
 
   virtual bool validateOperandSize(StringRef Constraint, unsigned Size) const;
 
@@ -183,7 +203,7 @@ public:
                                   StringRef Expression) const override {
     StringRef::iterator I, E;
     for (I = Constraint.begin(), E = Constraint.end(); I != E; ++I) {
-      if (isalpha(*I))
+      if (isalpha(*I) || *I == '@')
         break;
     }
     if (I == E)
@@ -209,6 +229,7 @@ public:
     case 'Y':
       if ((++I != E) && ((*I == '0') || (*I == 'z')))
         return "xmm0";
+      break;
     default:
       break;
     }
@@ -221,7 +242,7 @@ public:
 
   void getTargetDefines(const LangOptions &Opts,
                         MacroBuilder &Builder) const override;
-  
+
   static void setSSELevel(llvm::StringMap<bool> &Features, X86SSEEnum Level,
                           bool Enabled);
 
@@ -274,9 +295,6 @@ public:
     return checkCPUKind(CPU = getCPUKind(Name));
   }
 
-  bool supportsMultiVersioning() const override {
-    return getTriple().isOSBinFormatELF();
-  }
   unsigned multiVersionSortPriority(StringRef Name) const override;
 
   bool setFPMath(StringRef Name) override;
@@ -301,8 +319,8 @@ public:
     }
   }
 
-  CallingConv getDefaultCallingConv(CallingConvMethodType MT) const override {
-    return MT == CCMT_Member ? CC_X86ThisCall : CC_C;
+  CallingConv getDefaultCallingConv() const override {
+    return CC_C;
   }
 
   bool hasSjLjLowering() const override { return true; }
@@ -321,7 +339,8 @@ public:
     LongDoubleWidth = 96;
     LongDoubleAlign = 32;
     SuitableAlign = 128;
-    resetDataLayout("e-m:e-p:32:32-f64:32:64-f80:32-n8:16:32-S128");
+    resetDataLayout("e-m:e-p:32:32-p270:32:32-p271:32:32-p272:64:64-f64:32:64-"
+                    "f80:32-n8:16:32-S128");
     SizeType = UnsignedInt;
     PtrDiffType = SignedInt;
     IntPtrType = SignedInt;
@@ -333,11 +352,8 @@ public:
          (1 << TargetInfo::LongDouble));
 
     // x86-32 has atomics up to 8 bytes
-    CPUKind Kind = getCPUKind(Opts.CPU);
-    if (Kind >= CK_i586 || Kind == CK_Generic)
-      MaxAtomicPromoteWidth = MaxAtomicInlineWidth = 64;
-    else if (Kind >= CK_i486)
-      MaxAtomicPromoteWidth = MaxAtomicInlineWidth = 32;
+    MaxAtomicPromoteWidth = 64;
+    MaxAtomicInlineWidth = 32;
   }
 
   BuiltinVaListKind getBuiltinVaListKind() const override {
@@ -371,6 +387,11 @@ public:
     }
 
     return X86TargetInfo::validateOperandSize(Constraint, Size);
+  }
+
+  void setMaxAtomicWidth() override {
+    if (hasFeature("cx8"))
+      MaxAtomicInlineWidth = 64;
   }
 
   ArrayRef<Builtin::Info> getTargetBuiltins() const override;
@@ -419,7 +440,8 @@ public:
       UseSignedCharForObjCBool = false;
     SizeType = UnsignedLong;
     IntPtrType = SignedLong;
-    resetDataLayout("e-m:o-p:32:32-f64:32:64-f80:128-n8:16:32-S128");
+    resetDataLayout("e-m:o-p:32:32-p270:32:32-p271:32:32-p272:64:64-f64:32:64-"
+                    "f80:128-n8:16:32-S128");
     HasAlignMac68kSupport = true;
   }
 
@@ -444,9 +466,10 @@ public:
     DoubleAlign = LongLongAlign = 64;
     bool IsWinCOFF =
         getTriple().isOSWindows() && getTriple().isOSBinFormatCOFF();
-    resetDataLayout(IsWinCOFF
-                        ? "e-m:x-p:32:32-i64:64-f80:32-n8:16:32-a:0:32-S32"
-                        : "e-m:e-p:32:32-i64:64-f80:32-n8:16:32-a:0:32-S32");
+    resetDataLayout(IsWinCOFF ? "e-m:x-p:32:32-p270:32:32-p271:32:32-p272:64:"
+                                "64-i64:64-f80:32-n8:16:32-a:0:32-S32"
+                              : "e-m:e-p:32:32-p270:32:32-p271:32:32-p272:64:"
+                                "64-i64:64-f80:32-n8:16:32-a:0:32-S32");
   }
 };
 
@@ -464,7 +487,6 @@ public:
   void getTargetDefines(const LangOptions &Opts,
                         MacroBuilder &Builder) const override {
     WindowsX86_32TargetInfo::getTargetDefines(Opts, Builder);
-    WindowsX86_32TargetInfo::getVisualStudioDefines(Opts, Builder);
     // The value of the following reflects processor type.
     // 300=386, 400=486, 500=Pentium, 600=Blend (default)
     // We lost the original triple, so we use the default.
@@ -495,7 +517,8 @@ public:
       : X86_32TargetInfo(Triple, Opts) {
     this->WCharType = TargetInfo::UnsignedShort;
     DoubleAlign = LongLongAlign = 64;
-    resetDataLayout("e-m:x-p:32:32-i64:64-f80:32-n8:16:32-a:0:32-S32");
+    resetDataLayout("e-m:x-p:32:32-p270:32:32-p271:32:32-p272:64:64-i64:64-f80:"
+                    "32-n8:16:32-a:0:32-S32");
   }
 
   void getTargetDefines(const LangOptions &Opts,
@@ -532,7 +555,8 @@ public:
       : X86_32TargetInfo(Triple, Opts) {
     LongDoubleWidth = 64;
     LongDoubleFormat = &llvm::APFloat::IEEEdouble();
-    resetDataLayout("e-m:e-p:32:32-i64:32-f64:32-f128:32-n8:16:32-a:0:32-S32");
+    resetDataLayout("e-m:e-p:32:32-p270:32:32-p271:32:32-p272:64:64-i64:32-f64:"
+                    "32-f128:32-n8:16:32-a:0:32-S32");
     WIntType = UnsignedInt;
   }
 
@@ -560,7 +584,7 @@ public:
     IntPtrType = SignedLong;
     PtrDiffType = SignedLong;
   }
-  
+
   void getTargetDefines(const LangOptions &Opts,
                         MacroBuilder &Builder) const override {
     X86_32TargetInfo::getTargetDefines(Opts, Builder);
@@ -591,10 +615,12 @@ public:
     RegParmMax = 6;
 
     // Pointers are 32-bit in x32.
-    resetDataLayout(IsX32
-                        ? "e-m:e-p:32:32-i64:64-f80:128-n8:16:32:64-S128"
-                        : IsWinCOFF ? "e-m:w-i64:64-f80:128-n8:16:32:64-S128"
-                                    : "e-m:e-i64:64-f80:128-n8:16:32:64-S128");
+    resetDataLayout(IsX32 ? "e-m:e-p:32:32-p270:32:32-p271:32:32-p272:64:64-"
+                            "i64:64-f80:128-n8:16:32:64-S128"
+                          : IsWinCOFF ? "e-m:w-p270:32:32-p271:32:32-p272:64:"
+                                        "64-i64:64-f80:128-n8:16:32:64-S128"
+                                      : "e-m:e-p270:32:32-p271:32:32-p272:64:"
+                                        "64-i64:64-f80:128-n8:16:32:64-S128");
 
     // Use fpret only for long double.
     RealTypeUsesObjCFPRet = (1 << TargetInfo::LongDouble);
@@ -639,7 +665,7 @@ public:
     }
   }
 
-  CallingConv getDefaultCallingConv(CallingConvMethodType MT) const override {
+  CallingConv getDefaultCallingConv() const override {
     return CC_C;
   }
 
@@ -647,7 +673,7 @@ public:
   bool hasInt128Type() const override { return true; }
 
   unsigned getUnwindWordWidth() const override { return 64; }
-  
+
   unsigned getRegisterWidth() const override { return 64; }
 
   bool validateGlobalRegisterVariable(StringRef RegName, unsigned RegSize,
@@ -728,14 +754,13 @@ public:
   void getTargetDefines(const LangOptions &Opts,
                         MacroBuilder &Builder) const override {
     WindowsX86_64TargetInfo::getTargetDefines(Opts, Builder);
-    WindowsX86_64TargetInfo::getVisualStudioDefines(Opts, Builder);
     Builder.defineMacro("_M_X64", "100");
     Builder.defineMacro("_M_AMD64", "100");
   }
 
   TargetInfo::CallingConvKind
   getCallingConvKind(bool ClangABICompat4) const override {
-    return CCK_MicrosoftX86_64;
+    return CCK_MicrosoftWin64;
   }
 };
 
@@ -785,7 +810,8 @@ public:
     llvm::Triple T = llvm::Triple(Triple);
     if (T.isiOS())
       UseSignedCharForObjCBool = false;
-    resetDataLayout("e-m:o-i64:64-f80:128-n8:16:32:64-S128");
+    resetDataLayout("e-m:o-p270:32:32-p271:32:32-p272:64:64-i64:64-f80:128-n8:"
+                    "16:32:64-S128");
   }
 
   bool handleTargetFeatures(std::vector<std::string> &Features,
@@ -830,8 +856,6 @@ public:
       : LinuxTargetInfo<X86_64TargetInfo>(Triple, Opts) {
     LongDoubleFormat = &llvm::APFloat::IEEEquad();
   }
-
-  bool useFloat128ManglingForLongDouble() const override { return true; }
 };
 } // namespace targets
 } // namespace clang

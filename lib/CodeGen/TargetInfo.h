@@ -1,9 +1,8 @@
 //===---- TargetInfo.h - Encapsulate target details -------------*- C++ -*-===//
 //
-//                     The LLVM Compiler Infrastructure
-//
-// This file is distributed under the University of Illinois Open Source
-// License. See LICENSE.TXT for details.
+// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
 //===----------------------------------------------------------------------===//
 //
@@ -157,6 +156,12 @@ public:
     return "";
   }
 
+  /// Determine whether a call to objc_retainAutoreleasedReturnValue should be
+  /// marked as 'notail'.
+  virtual bool shouldSuppressTailCallsOfRetainAutoreleasedReturnValue() const {
+    return false;
+  }
+
   /// Return a constant used by UBSan as a signature to identify functions
   /// possessing type information, or 0 if the platform is unsupported.
   virtual llvm::Constant *
@@ -262,9 +267,16 @@ public:
                                                LangAS SrcAddr, LangAS DestAddr,
                                                llvm::Type *DestTy) const;
 
+  /// Get address space of pointer parameter for __cxa_atexit.
+  virtual LangAS getAddrSpaceOfCxaAtexitPtrParam() const {
+    return LangAS::Default;
+  }
+
   /// Get the syncscope used in LLVM IR.
-  virtual llvm::SyncScope::ID getLLVMSyncScopeID(SyncScope S,
-                                                 llvm::LLVMContext &C) const;
+  virtual llvm::SyncScope::ID getLLVMSyncScopeID(const LangOptions &LangOpts,
+                                                 SyncScope Scope,
+                                                 llvm::AtomicOrdering Ordering,
+                                                 llvm::LLVMContext &Ctx) const;
 
   /// Interface class for filling custom fields of a block literal for OpenCL.
   class TargetOpenCLBlockHelper {
@@ -302,7 +314,7 @@ public:
   /// as 'used', and having internal linkage.
   virtual bool shouldEmitStaticExternCAliases() const { return true; }
 
-  virtual void setCUDAKernelCallingConvention(llvm::Function *F) const {}
+  virtual void setCUDAKernelCallingConvention(const FunctionType *&FT) const {}
 };
 
 } // namespace CodeGen

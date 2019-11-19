@@ -1,9 +1,8 @@
 //===- NeonEmitter.cpp - Generate arm_neon.h for use with clang -*- C++ -*-===//
 //
-//                     The LLVM Compiler Infrastructure
-//
-// This file is distributed under the University of Illinois Open Source
-// License. See LICENSE.TXT for details.
+// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
 //===----------------------------------------------------------------------===//
 //
@@ -24,6 +23,7 @@
 //
 //===----------------------------------------------------------------------===//
 
+#include "TableGenBackends.h"
 #include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/None.h"
@@ -333,6 +333,17 @@ class Intrinsic {
   NeonEmitter &Emitter;
   std::stringstream OS;
 
+  bool isBigEndianSafe() const {
+    if (BigEndianSafe)
+      return true;
+
+    for (const auto &T : Types){
+      if (T.isVector() && T.getNumElements() > 1)
+        return false;
+    }
+    return true;
+  }
+
 public:
   Intrinsic(Record *R, StringRef Name, StringRef Proto, TypeSpec OutTS,
             TypeSpec InTS, ClassKind CK, ListInit *Body, NeonEmitter &Emitter,
@@ -494,6 +505,7 @@ private:
     std::pair<Type, std::string> emitDagSaveTemp(DagInit *DI);
     std::pair<Type, std::string> emitDagSplat(DagInit *DI);
     std::pair<Type, std::string> emitDagDup(DagInit *DI);
+    std::pair<Type, std::string> emitDagDupTyped(DagInit *DI);
     std::pair<Type, std::string> emitDagShuffle(DagInit *DI);
     std::pair<Type, std::string> emitDagCast(DagInit *DI, bool IsBitCast);
     std::pair<Type, std::string> emitDagCall(DagInit *DI);
@@ -624,7 +636,7 @@ std::string Type::builtin_str() const {
     default: llvm_unreachable("Unhandled case!");
     }
 
-  if (isChar() && !Pointer)
+  if (isChar() && !Pointer && Signed)
     // Make chars explicitly signed.
     S = "S" + S;
   else if (isInteger() && !Pointer && !Signed)
@@ -895,6 +907,18 @@ void Type::applyModifier(char Mod) {
     break;
   case 'H':
     Float = true;
+    ElementBitwidth = 16;
+    break;
+  case '0':
+    Float = true;
+    if (AppliedQuad)
+      Bitwidth /= 2;
+    ElementBitwidth = 16;
+    break;
+  case '1':
+    Float = true;
+    if (!AppliedQuad)
+      Bitwidth *= 2;
     ElementBitwidth = 16;
     break;
   case 'g':
@@ -1281,7 +1305,7 @@ void Intrinsic::emitReverseVariable(Variable &Dest, Variable &Src) {
 }
 
 void Intrinsic::emitArgumentReversal() {
-  if (BigEndianSafe)
+  if (isBigEndianSafe())
     return;
 
   // Reverse all vector arguments.
@@ -1302,7 +1326,7 @@ void Intrinsic::emitArgumentReversal() {
 }
 
 void Intrinsic::emitReturnReversal() {
-  if (BigEndianSafe)
+  if (isBigEndianSafe())
     return;
   if (!getReturnType().isVector() || getReturnType().isVoid() ||
       getReturnType().getNumElements() == 1)
@@ -1389,7 +1413,7 @@ void Intrinsic::emitBodyAsBuiltinCall() {
     if (T.getNumVectors() > 1) {
       // Check if an explicit cast is needed.
       std::string Cast;
-      if (T.isChar() || T.isPoly() || !T.isSigned()) {
+      if (LocalCK == ClassB) {
         Type T2 = T;
         T2.makeOneVector();
         T2.makeInteger(8, /*Signed=*/true);
@@ -1418,8 +1442,12 @@ void Intrinsic::emitBodyAsBuiltinCall() {
     }
 
     // Check if an explicit cast is needed.
-    if (CastToType.isVector()) {
+    if (CastToType.isVector() &&
+        (LocalCK == ClassB || (T.isHalf() && !T.isScalarForMangling()))) {
       CastToType.makeInteger(8, true);
+      Arg = "(" + CastToType.str() + ")" + Arg;
+    } else if (CastToType.isVector() && LocalCK == ClassI) {
+      CastToType.makeSigned();
       Arg = "(" + CastToType.str() + ")" + Arg;
     }
 
@@ -1507,6 +1535,8 @@ std::pair<Type, std::string> Intrinsic::DagEmitter::emitDag(DagInit *DI) {
     return emitDagShuffle(DI);
   if (Op == "dup")
     return emitDagDup(DI);
+  if (Op == "dup_typed")
+    return emitDagDupTyped(DI);
   if (Op == "splat")
     return emitDagSplat(DI);
   if (Op == "save_temp")
@@ -1564,7 +1594,10 @@ std::pair<Type, std::string> Intrinsic::DagEmitter::emitDagCall(DagInit *DI) {
   Intr.Dependencies.insert(&Callee);
 
   // Now create the call itself.
-  std::string S = CallPrefix.str() + Callee.getMangledName(true) + "(";
+  std::string S = "";
+  if (!Callee.isBigEndianSafe())
+    S += CallPrefix.str();
+  S += Callee.getMangledName(true) + "(";
   for (unsigned I = 0; I < DI->getNumArgs() - 1; ++I) {
     if (I != 0)
       S += ", ";
@@ -1718,12 +1751,12 @@ std::pair<Type, std::string> Intrinsic::DagEmitter::emitDagShuffle(DagInit *DI){
 
   SetTheory ST;
   SetTheory::RecSet Elts;
-  ST.addOperator("lowhalf", llvm::make_unique<LowHalf>());
-  ST.addOperator("highhalf", llvm::make_unique<HighHalf>());
+  ST.addOperator("lowhalf", std::make_unique<LowHalf>());
+  ST.addOperator("highhalf", std::make_unique<HighHalf>());
   ST.addOperator("rev",
-                 llvm::make_unique<Rev>(Arg1.first.getElementSizeInBits()));
+                 std::make_unique<Rev>(Arg1.first.getElementSizeInBits()));
   ST.addExpander("MaskExpand",
-                 llvm::make_unique<MaskExpander>(Arg1.first.getNumElements()));
+                 std::make_unique<MaskExpander>(Arg1.first.getNumElements()));
   ST.evaluate(DI->getArg(2), Elts, None);
 
   std::string S = "__builtin_shufflevector(" + Arg1.second + ", " + Arg2.second;
@@ -1765,6 +1798,28 @@ std::pair<Type, std::string> Intrinsic::DagEmitter::emitDagDup(DagInit *DI) {
     if (I != 0)
       S += ", ";
     S += A.second;
+  }
+  S += "}";
+
+  return std::make_pair(T, S);
+}
+
+std::pair<Type, std::string> Intrinsic::DagEmitter::emitDagDupTyped(DagInit *DI) {
+  assert_with_loc(DI->getNumArgs() == 2, "dup_typed() expects two arguments");
+  std::pair<Type, std::string> A = emitDagArg(DI->getArg(0),
+                                              DI->getArgNameStr(0));
+  std::pair<Type, std::string> B = emitDagArg(DI->getArg(1),
+                                              DI->getArgNameStr(1));
+  assert_with_loc(B.first.isScalar(),
+                  "dup_typed() requires a scalar as the second argument");
+
+  Type T = A.first;
+  assert_with_loc(T.isVector(), "dup_typed() used but target type is scalar!");
+  std::string S = "(" + T.str() + ") {";
+  for (unsigned I = 0; I < T.getNumElements(); ++I) {
+    if (I != 0)
+      S += ", ";
+    S += B.second;
   }
   S += "}";
 
@@ -1853,6 +1908,11 @@ Intrinsic::DagEmitter::emitDagArg(Init *Arg, std::string ArgName) {
 }
 
 std::string Intrinsic::generate() {
+  // Avoid duplicated code for big and little endian
+  if (isBigEndianSafe()) {
+    generateImpl(false, "", "");
+    return OS.str();
+  }
   // Little endian intrinsics are simple and don't require any argument
   // swapping.
   OS << "#ifdef __LITTLE_ENDIAN__\n";
@@ -2020,7 +2080,7 @@ void NeonEmitter::createIntrinsic(Record *R,
     }
   }
 
-  llvm::sort(NewTypeSpecs.begin(), NewTypeSpecs.end());
+  llvm::sort(NewTypeSpecs);
   NewTypeSpecs.erase(std::unique(NewTypeSpecs.begin(), NewTypeSpecs.end()),
 		     NewTypeSpecs.end());
   auto &Entry = IntrinsicMap[Name];
@@ -2162,8 +2222,7 @@ void NeonEmitter::genOverloadTypeCheckCode(raw_ostream &OS,
   OS << "#endif\n\n";
 }
 
-void
-NeonEmitter::genIntrinsicRangeCheckCode(raw_ostream &OS,
+void NeonEmitter::genIntrinsicRangeCheckCode(raw_ostream &OS,
                                         SmallVectorImpl<Intrinsic *> &Defs) {
   OS << "#ifdef GET_NEON_IMMEDIATE_CHECK\n";
 
@@ -2188,11 +2247,15 @@ NeonEmitter::genIntrinsicRangeCheckCode(raw_ostream &OS,
     Record *R = Def->getRecord();
     if (R->getValueAsBit("isVCVT_N")) {
       // VCVT between floating- and fixed-point values takes an immediate
-      // in the range [1, 32) for f32 or [1, 64) for f64.
+      // in the range [1, 32) for f32 or [1, 64) for f64 or [1, 16) for f16.
       LowerBound = "1";
-      if (Def->getBaseType().getElementSizeInBits() == 32)
+	  if (Def->getBaseType().getElementSizeInBits() == 16 ||
+		  Def->getName().find('h') != std::string::npos)
+		// VCVTh operating on FP16 intrinsics in range [1, 16)
+		UpperBound = "15";
+	  else if (Def->getBaseType().getElementSizeInBits() == 32)
         UpperBound = "31";
-      else
+	  else
         UpperBound = "63";
     } else if (R->getValueAsBit("isScalarShift")) {
       // Right shifts have an 'r' in the name, left shifts do not. Convert
@@ -2406,7 +2469,7 @@ void NeonEmitter::run(raw_ostream &OS) {
     OS << "#endif\n";
   OS << "\n";
 
-  OS << "#define __ai static inline __attribute__((__always_inline__, "
+  OS << "#define __ai static __inline__ __attribute__((__always_inline__, "
         "__nodebug__))\n\n";
 
   SmallVector<Intrinsic *, 128> Defs;
@@ -2417,9 +2480,7 @@ void NeonEmitter::run(raw_ostream &OS) {
   for (auto *I : Defs)
     I->indexBody();
 
-  std::stable_sort(
-      Defs.begin(), Defs.end(),
-      [](const Intrinsic *A, const Intrinsic *B) { return *A < *B; });
+  llvm::stable_sort(Defs, llvm::deref<std::less<>>());
 
   // Only emit a def when its requirements have been met.
   // FIXME: This loop could be made faster, but it's fast enough for now.
@@ -2432,7 +2493,7 @@ void NeonEmitter::run(raw_ostream &OS) {
          I != Defs.end(); /*No step*/) {
       bool DependenciesSatisfied = true;
       for (auto *II : (*I)->getDependencies()) {
-        if (std::find(Defs.begin(), Defs.end(), II) != Defs.end())
+        if (llvm::is_contained(Defs, II))
           DependenciesSatisfied = false;
       }
       if (!DependenciesSatisfied) {
@@ -2515,7 +2576,7 @@ void NeonEmitter::runFP16(raw_ostream &OS) {
 
   OS << "typedef __fp16 float16_t;\n";
 
-  OS << "#define __ai static inline __attribute__((__always_inline__, "
+  OS << "#define __ai static __inline__ __attribute__((__always_inline__, "
         "__nodebug__))\n\n";
 
   SmallVector<Intrinsic *, 128> Defs;
@@ -2526,9 +2587,7 @@ void NeonEmitter::runFP16(raw_ostream &OS) {
   for (auto *I : Defs)
     I->indexBody();
 
-  std::stable_sort(
-      Defs.begin(), Defs.end(),
-      [](const Intrinsic *A, const Intrinsic *B) { return *A < *B; });
+  llvm::stable_sort(Defs, llvm::deref<std::less<>>());
 
   // Only emit a def when its requirements have been met.
   // FIXME: This loop could be made faster, but it's fast enough for now.
@@ -2541,7 +2600,7 @@ void NeonEmitter::runFP16(raw_ostream &OS) {
          I != Defs.end(); /*No step*/) {
       bool DependenciesSatisfied = true;
       for (auto *II : (*I)->getDependencies()) {
-        if (std::find(Defs.begin(), Defs.end(), II) != Defs.end())
+        if (llvm::is_contained(Defs, II))
           DependenciesSatisfied = false;
       }
       if (!DependenciesSatisfied) {
@@ -2575,22 +2634,18 @@ void NeonEmitter::runFP16(raw_ostream &OS) {
   OS << "#endif /* __ARM_FP16_H */\n";
 }
 
-namespace clang {
-
-void EmitNeon(RecordKeeper &Records, raw_ostream &OS) {
+void clang::EmitNeon(RecordKeeper &Records, raw_ostream &OS) {
   NeonEmitter(Records).run(OS);
 }
 
-void EmitFP16(RecordKeeper &Records, raw_ostream &OS) {
+void clang::EmitFP16(RecordKeeper &Records, raw_ostream &OS) {
   NeonEmitter(Records).runFP16(OS);
 }
 
-void EmitNeonSema(RecordKeeper &Records, raw_ostream &OS) {
+void clang::EmitNeonSema(RecordKeeper &Records, raw_ostream &OS) {
   NeonEmitter(Records).runHeader(OS);
 }
 
-void EmitNeonTest(RecordKeeper &Records, raw_ostream &OS) {
+void clang::EmitNeonTest(RecordKeeper &Records, raw_ostream &OS) {
   llvm_unreachable("Neon test generation no longer implemented!");
 }
-
-} // end namespace clang

@@ -59,14 +59,14 @@ int f() {
 // CHECK-ARM-EABI-FREEBSD-NOT: attributes #{{[0-9]+}} = { {{.*}}"instrument-function-entry-inlined"="\01__gnu_mcount_nc"{{.*}} }
 // CHECK-ARM64-EABI-FREEBSD: attributes #{{[0-9]+}} = { {{.*}}"instrument-function-entry-inlined"=".mcount"{{.*}} }
 // CHECK-ARM64-EABI-FREEBSD-NOT: attributes #{{[0-9]+}} = { {{.*}}"instrument-function-entry-inlined"="\01__gnu_mcount_nc"{{.*}} }
-// CHECK-ARM-EABI-NETBSD: attributes #{{[0-9]+}} = { {{.*}}"instrument-function-entry-inlined"="_mcount"{{.*}} }
+// CHECK-ARM-EABI-NETBSD: attributes #{{[0-9]+}} = { {{.*}}"instrument-function-entry-inlined"="__mcount"{{.*}} }
 // CHECK-ARM-EABI-NETBSD-NOT: attributes #{{[0-9]+}} = { {{.*}}"instrument-function-entry-inlined"="\01__gnu_mcount_nc"{{.*}} }
 // CHECK-ARM-EABI-OPENBSD: attributes #{{[0-9]+}} = { {{.*}}"instrument-function-entry-inlined"="__mcount"{{.*}} }
 // CHECK-ARM-EABI-OPENBSD-NOT: attributes #{{[0-9]+}} = { {{.*}}"instrument-function-entry-inlined"="\01__gnu_mcount_nc"{{.*}} }
 // CHECK-ARM64-EABI-OPENBSD: attributes #{{[0-9]+}} = { {{.*}}"instrument-function-entry-inlined"="__mcount"{{.*}} }
 // CHECK-ARM64-EABI-OPENBSD-NOT: attributes #{{[0-9]+}} = { {{.*}}"instrument-function-entry-inlined"="\01__gnu_mcount_nc"{{.*}} }
 // CHECK-ARM-EABI-MEABI-GNU-NOT: attributes #{{[0-9]+}} = { {{.*}}"instrument-function-entry-inlined"="mcount"{{.*}} }
-// CHECK-ARM-EABI-MEABI-GNU: attributes #{{[0-9]+}} = { {{.*}}"instrument-function-entry-inlined"="\01__gnu_mcount_nc"{{.*}} }
+// CHECK-ARM-EABI-MEABI-GNU: attributes #{{[0-9]+}} = { {{.*}}"instrument-function-entry-inlined"="llvm.arm.gnu.eabi.mcount"{{.*}} }
 // CHECK-ARM-EABI-RTEMS: attributes #{{[0-9]+}} = { {{.*}}"instrument-function-entry-inlined"="mcount"{{.*}} }
 // CHECK-ARM-EABI-RTEMS-NOT: attributes #{{[0-9]+}} = { {{.*}}"instrument-function-entry-inlined"="\01__gnu_mcount_nc"{{.*}} }
 // CHECK-ARM64-EABI-RTEMS: attributes #{{[0-9]+}} = { {{.*}}"instrument-function-entry-inlined"="mcount"{{.*}} }

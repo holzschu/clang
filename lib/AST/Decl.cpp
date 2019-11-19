@@ -1,9 +1,8 @@
 //===- Decl.cpp - Declaration AST Node Implementation ---------------------===//
 //
-//                     The LLVM Compiler Infrastructure
-//
-// This file is distributed under the University of Illinois Open Source
-// License. See LICENSE.TXT for details.
+// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
 //===----------------------------------------------------------------------===//
 //
@@ -14,6 +13,7 @@
 #include "clang/AST/Decl.h"
 #include "Linkage.h"
 #include "clang/AST/ASTContext.h"
+#include "clang/AST/ASTDiagnostic.h"
 #include "clang/AST/ASTLambda.h"
 #include "clang/AST/ASTMutationListener.h"
 #include "clang/AST/CanonicalType.h"
@@ -49,7 +49,6 @@
 #include "clang/Basic/TargetCXXABI.h"
 #include "clang/Basic/TargetInfo.h"
 #include "clang/Basic/Visibility.h"
-#include "clang/Frontend/FrontendDiagnostic.h"
 #include "llvm/ADT/APSInt.h"
 #include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/None.h"
@@ -243,7 +242,7 @@ LinkageInfo LinkageComputer::getLVForType(const Type &T,
   return getTypeLinkageAndVisibility(&T);
 }
 
-/// \brief Get the most restrictive linkage for the types in the given
+/// Get the most restrictive linkage for the types in the given
 /// template parameter list.  For visibility purposes, template
 /// parameters are part of the signature of a template.
 LinkageInfo LinkageComputer::getLVForTemplateParameterList(
@@ -310,7 +309,7 @@ static const Decl *getOutermostFuncOrBlockContext(const Decl *D) {
   return Ret;
 }
 
-/// \brief Get the most restrictive linkage for the types and
+/// Get the most restrictive linkage for the types and
 /// declarations in the given template argument list.
 ///
 /// Note that we don't take an LVComputationKind because we always
@@ -568,7 +567,14 @@ static bool isSingleLineLanguageLinkage(const Decl &D) {
   return false;
 }
 
-static bool isExportedFromModuleIntefaceUnit(const NamedDecl *D) {
+/// Determine whether D is declared in the purview of a named module.
+static bool isInModulePurview(const NamedDecl *D) {
+  if (auto *M = D->getOwningModule())
+    return M->isModulePurview();
+  return false;
+}
+
+static bool isExportedFromModuleInterfaceUnit(const NamedDecl *D) {
   // FIXME: Handle isModulePrivate.
   switch (D->getModuleOwnershipKind()) {
   case Decl::ModuleOwnershipKind::Unowned:
@@ -576,8 +582,7 @@ static bool isExportedFromModuleIntefaceUnit(const NamedDecl *D) {
     return false;
   case Decl::ModuleOwnershipKind::Visible:
   case Decl::ModuleOwnershipKind::VisibleWhenImported:
-    if (auto *M = D->getOwningModule())
-      return M->Kind == Module::ModuleInterfaceUnit;
+    return isInModulePurview(D);
   }
   llvm_unreachable("unexpected module ownership kind");
 }
@@ -587,9 +592,8 @@ static LinkageInfo getInternalLinkageFor(const NamedDecl *D) {
   // as "module-internal linkage", which means that they have internal linkage
   // formally but can be indirectly accessed from outside the module via inline
   // functions and templates defined within the module.
-  if (auto *M = D->getOwningModule())
-    if (M->Kind == Module::ModuleInterfaceUnit)
-      return LinkageInfo(ModuleInternalLinkage, DefaultVisibility, false);
+  if (isInModulePurview(D))
+    return LinkageInfo(ModuleInternalLinkage, DefaultVisibility, false);
 
   return LinkageInfo::internal();
 }
@@ -599,13 +603,23 @@ static LinkageInfo getExternalLinkageFor(const NamedDecl *D) {
   //   - A name declared at namespace scope that does not have internal linkage
   //     by the previous rules and that is introduced by a non-exported
   //     declaration has module linkage.
-  if (auto *M = D->getOwningModule())
-    if (M->Kind == Module::ModuleInterfaceUnit)
-      if (!isExportedFromModuleIntefaceUnit(
-              cast<NamedDecl>(D->getCanonicalDecl())))
-        return LinkageInfo(ModuleLinkage, DefaultVisibility, false);
+  if (isInModulePurview(D) && !isExportedFromModuleInterfaceUnit(
+                                  cast<NamedDecl>(D->getCanonicalDecl())))
+    return LinkageInfo(ModuleLinkage, DefaultVisibility, false);
 
   return LinkageInfo::external();
+}
+
+static StorageClass getStorageClass(const Decl *D) {
+  if (auto *TD = dyn_cast<TemplateDecl>(D))
+    D = TD->getTemplatedDecl();
+  if (D) {
+    if (auto *VD = dyn_cast<VarDecl>(D))
+      return VD->getStorageClass();
+    if (auto *FD = dyn_cast<FunctionDecl>(D))
+      return FD->getStorageClass();
+  }
+  return SC_None;
 }
 
 LinkageInfo
@@ -619,24 +633,28 @@ LinkageComputer::getLVForNamespaceScopeDecl(const NamedDecl *D,
   // C++ [basic.link]p3:
   //   A name having namespace scope (3.3.6) has internal linkage if it
   //   is the name of
-  //     - an object, reference, function or function template that is
-  //       explicitly declared static; or,
-  // (This bullet corresponds to C99 6.2.2p3.)
-  if (const auto *Var = dyn_cast<VarDecl>(D)) {
-    // Explicitly declared static.
-    if (Var->getStorageClass() == SC_Static)
-      return getInternalLinkageFor(Var);
 
-    // - a non-inline, non-volatile object or reference that is explicitly
-    //   declared const or constexpr and neither explicitly declared extern
-    //   nor previously declared to have external linkage; or (there is no
-    //   equivalent in C99)
-    // The C++ modules TS adds "non-exported" to this list.
+  if (getStorageClass(D->getCanonicalDecl()) == SC_Static) {
+    // - a variable, variable template, function, or function template
+    //   that is explicitly declared static; or
+    // (This bullet corresponds to C99 6.2.2p3.)
+    return getInternalLinkageFor(D);
+  }
+
+  if (const auto *Var = dyn_cast<VarDecl>(D)) {
+    // - a non-template variable of non-volatile const-qualified type, unless
+    //   - it is explicitly declared extern, or
+    //   - it is inline or exported, or
+    //   - it was previously declared and the prior declaration did not have
+    //     internal linkage
+    // (There is no equivalent in C99.)
     if (Context.getLangOpts().CPlusPlus &&
-        Var->getType().isConstQualified() && 
+        Var->getType().isConstQualified() &&
         !Var->getType().isVolatileQualified() &&
         !Var->isInline() &&
-        !isExportedFromModuleIntefaceUnit(Var)) {
+        !isExportedFromModuleInterfaceUnit(Var) &&
+        !isa<VarTemplateSpecializationDecl>(Var) &&
+        !Var->getDescribedVarTemplate()) {
       const VarDecl *PrevVar = Var->getPreviousDecl();
       if (PrevVar)
         return getLVForDecl(PrevVar, computation);
@@ -656,14 +674,6 @@ LinkageComputer::getLVForNamespaceScopeDecl(const NamedDecl *D,
       if (PrevVar->getStorageClass() == SC_Static)
         return getInternalLinkageFor(Var);
     }
-  } else if (const FunctionDecl *Function = D->getAsFunction()) {
-    // C++ [temp]p4:
-    //   A non-member function template can have internal linkage; any
-    //   other template name shall have external linkage.
-
-    // Explicitly declared static.
-    if (Function->getCanonicalDecl()->getStorageClass() == SC_Static)
-      return getInternalLinkageFor(Function);
   } else if (const auto *IFD = dyn_cast<IndirectFieldDecl>(D)) {
     //   - a data member of an anonymous union.
     const VarDecl *VD = IFD->getVarDecl();
@@ -672,6 +682,8 @@ LinkageComputer::getLVForNamespaceScopeDecl(const NamedDecl *D,
   }
   assert(!isa<FieldDecl>(D) && "Didn't expect a FieldDecl!");
 
+  // FIXME: This gives internal linkage to names that should have no linkage
+  // (those not covered by [basic.link]p6).
   if (D->isInAnonymousNamespace()) {
     const auto *Var = dyn_cast<VarDecl>(D);
     const auto *Func = dyn_cast<FunctionDecl>(D);
@@ -725,16 +737,26 @@ LinkageComputer::getLVForNamespaceScopeDecl(const NamedDecl *D,
       // If we're paying attention to global visibility, apply
       // -finline-visibility-hidden if this is an inline method.
       if (useInlineVisibilityHidden(D))
-        LV.mergeVisibility(HiddenVisibility, true);
+        LV.mergeVisibility(HiddenVisibility, /*visibilityExplicit=*/false);
     }
   }
 
   // C++ [basic.link]p4:
 
-  //   A name having namespace scope has external linkage if it is the
-  //   name of
+  //   A name having namespace scope that has not been given internal linkage
+  //   above and that is the name of
+  //   [...bullets...]
+  //   has its linkage determined as follows:
+  //     - if the enclosing namespace has internal linkage, the name has
+  //       internal linkage; [handled above]
+  //     - otherwise, if the declaration of the name is attached to a named
+  //       module and is not exported, the name has module linkage;
+  //     - otherwise, the name has external linkage.
+  // LV is currently set up to handle the last two bullets.
   //
-  //     - an object or reference, unless it has internal linkage; or
+  //   The bullets are:
+
+  //     - a variable; or
   if (const auto *Var = dyn_cast<VarDecl>(D)) {
     // GCC applies the following optimization to variables and static
     // data members, but not to functions:
@@ -780,7 +802,7 @@ LinkageComputer::getLVForNamespaceScopeDecl(const NamedDecl *D,
       mergeTemplateLV(LV, spec, computation);
     }
 
-  //     - a function, unless it has internal linkage; or
+  //     - a function; or
   } else if (const auto *Function = dyn_cast<FunctionDecl>(D)) {
     // In theory, we can modify the function's LV by the LV of its
     // type unless it has C linkage (see comment above about variables
@@ -834,7 +856,8 @@ LinkageComputer::getLVForNamespaceScopeDecl(const NamedDecl *D,
       mergeTemplateLV(LV, spec, computation);
     }
 
-  //     - an enumerator belonging to an enumeration with external linkage;
+  // FIXME: This is not part of the C++ standard any more.
+  //     - an enumerator belonging to an enumeration with external linkage; or
   } else if (isa<EnumConstantDecl>(D)) {
     LinkageInfo EnumLV = getLVForDecl(cast<NamedDecl>(D->getDeclContext()),
                                       computation);
@@ -842,16 +865,16 @@ LinkageComputer::getLVForNamespaceScopeDecl(const NamedDecl *D,
       return LinkageInfo::none();
     LV.merge(EnumLV);
 
-  //     - a template, unless it is a function template that has
-  //       internal linkage (Clause 14);
+  //     - a template
   } else if (const auto *temp = dyn_cast<TemplateDecl>(D)) {
     bool considerVisibility = !hasExplicitVisibilityAlready(computation);
     LinkageInfo tempLV =
       getLVForTemplateParameterList(temp->getTemplateParameters(), computation);
     LV.mergeMaybeWithVisibility(tempLV, considerVisibility);
 
-  //     - a namespace (7.3), unless it is declared within an unnamed
-  //       namespace.
+  //     An unnamed namespace or a namespace declared directly or indirectly
+  //     within an unnamed namespace has internal linkage. All other namespaces
+  //     have external linkage.
   //
   // We handled names in anonymous namespaces above.
   } else if (isa<NamespaceDecl>(D)) {
@@ -915,7 +938,7 @@ LinkageComputer::getLVForClassMember(const NamedDecl *D,
     // Note that we do this before merging information about
     // the class visibility.
     if (!LV.isVisibilityExplicit() && useInlineVisibilityHidden(D))
-      LV.mergeVisibility(HiddenVisibility, true);
+      LV.mergeVisibility(HiddenVisibility, /*visibilityExplicit=*/false);
   }
 
   // If this class member has an explicit visibility attribute, the only
@@ -1049,7 +1072,7 @@ bool NamedDecl::isLinkageValid() const {
 ObjCStringFormatFamily NamedDecl::getObjCFStringFormattingFamily() const {
   StringRef name = getName();
   if (name.empty()) return SFF_None;
-  
+
   if (name.front() == 'C')
     if (name == "CFStringCreateWithFormat" ||
         name == "CFStringCreateWithFormatAndArguments" ||
@@ -1262,7 +1285,27 @@ LinkageInfo LinkageComputer::getLVForLocalDecl(const NamedDecl *D,
         !isTemplateInstantiation(FD->getTemplateSpecializationKind()))
       return LinkageInfo::none();
 
+    // If a function is hidden by -fvisibility-inlines-hidden option and
+    // is not explicitly attributed as a hidden function,
+    // we should not make static local variables in the function hidden.
     LV = getLVForDecl(FD, computation);
+    if (isa<VarDecl>(D) && useInlineVisibilityHidden(FD) &&
+        !LV.isVisibilityExplicit()) {
+      assert(cast<VarDecl>(D)->isStaticLocal());
+      // If this was an implicitly hidden inline method, check again for
+      // explicit visibility on the parent class, and use that for static locals
+      // if present.
+      if (const auto *MD = dyn_cast<CXXMethodDecl>(FD))
+        LV = getLVForDecl(MD->getParent(), computation);
+      if (!LV.isVisibilityExplicit()) {
+        Visibility globalVisibility =
+            computation.isValueVisibility()
+                ? Context.getLangOpts().getValueVisibilityMode()
+                : Context.getLangOpts().getTypeVisibilityMode();
+        return LinkageInfo(VisibleNoLinkage, globalVisibility,
+                           /*visibilityExplicit=*/false);
+      }
+    }
   }
   if (!isExternallyVisible(LV.getLinkage()))
     return LinkageInfo::none();
@@ -1338,35 +1381,37 @@ LinkageInfo LinkageComputer::computeLVForDecl(const NamedDecl *D,
     case Decl::ObjCPropertyImpl:
     case Decl::ObjCProtocol:
       return getExternalLinkageFor(D);
-      
+
     case Decl::CXXRecord: {
       const auto *Record = cast<CXXRecordDecl>(D);
       if (Record->isLambda()) {
-        if (!Record->getLambdaManglingNumber()) {
+        if (Record->hasKnownLambdaInternalLinkage() ||
+            !Record->getLambdaManglingNumber()) {
           // This lambda has no mangling number, so it's internal.
           return getInternalLinkageFor(D);
         }
 
         // This lambda has its linkage/visibility determined:
-        //  - either by the outermost lambda if that lambda has no mangling 
-        //    number. 
+        //  - either by the outermost lambda if that lambda has no mangling
+        //    number.
         //  - or by the parent of the outer most lambda
-        // This prevents infinite recursion in settings such as nested lambdas 
-        // used in NSDMI's, for e.g. 
+        // This prevents infinite recursion in settings such as nested lambdas
+        // used in NSDMI's, for e.g.
         //  struct L {
         //    int t{};
-        //    int t2 = ([](int a) { return [](int b) { return b; };})(t)(t);    
+        //    int t2 = ([](int a) { return [](int b) { return b; };})(t)(t);
         //  };
-        const CXXRecordDecl *OuterMostLambda = 
+        const CXXRecordDecl *OuterMostLambda =
             getOutermostEnclosingLambda(Record);
-        if (!OuterMostLambda->getLambdaManglingNumber())
+        if (OuterMostLambda->hasKnownLambdaInternalLinkage() ||
+            !OuterMostLambda->getLambdaManglingNumber())
           return getInternalLinkageFor(D);
-        
+
         return getLVForClosure(
                   OuterMostLambda->getDeclContext()->getRedeclContext(),
                   OuterMostLambda->getLambdaContextDecl(), computation);
       }
-      
+
       break;
     }
   }
@@ -1374,7 +1419,7 @@ LinkageInfo LinkageComputer::computeLVForDecl(const NamedDecl *D,
   // Handle linkage for namespace-scope names.
   if (D->getDeclContext()->getRedeclContext()->isFileContext())
     return getLVForNamespaceScopeDecl(D, computation, IgnoreVarTypeLinkage);
-  
+
   // C++ [basic.link]p5:
   //   In addition, a member function, static data member, a named
   //   class or enumeration of class scope, or an unnamed class or
@@ -1488,6 +1533,11 @@ Module *Decl::getOwningModuleForLinkage(bool IgnoreLinkage) const {
     }
     return InternalLinkage ? M->Parent : nullptr;
   }
+
+  case Module::PrivateModuleFragment:
+    // The private module fragment is part of its containing module for linkage
+    // purposes.
+    return M->Parent;
   }
 
   llvm_unreachable("unknown module kind");
@@ -1510,17 +1560,39 @@ void NamedDecl::printQualifiedName(raw_ostream &OS) const {
 
 void NamedDecl::printQualifiedName(raw_ostream &OS,
                                    const PrintingPolicy &P) const {
-  const DeclContext *Ctx = getDeclContext();
-
-  // For ObjC methods, look through categories and use the interface as context.
-  if (auto *MD = dyn_cast<ObjCMethodDecl>(this))
-    if (auto *ID = MD->getClassInterface())
-      Ctx = ID;
-
-  if (Ctx->isFunctionOrMethod()) {
+  if (getDeclContext()->isFunctionOrMethod()) {
+    // We do not print '(anonymous)' for function parameters without name.
     printName(OS);
     return;
   }
+  printNestedNameSpecifier(OS, P);
+  if (getDeclName() || isa<DecompositionDecl>(this))
+    OS << *this;
+  else
+    OS << "(anonymous)";
+}
+
+void NamedDecl::printNestedNameSpecifier(raw_ostream &OS) const {
+  printNestedNameSpecifier(OS, getASTContext().getPrintingPolicy());
+}
+
+void NamedDecl::printNestedNameSpecifier(raw_ostream &OS,
+                                         const PrintingPolicy &P) const {
+  const DeclContext *Ctx = getDeclContext();
+
+  // For ObjC methods and properties, look through categories and use the
+  // interface as context.
+  if (auto *MD = dyn_cast<ObjCMethodDecl>(this))
+    if (auto *ID = MD->getClassInterface())
+      Ctx = ID;
+  if (auto *PD = dyn_cast<ObjCPropertyDecl>(this)) {
+    if (auto *MD = PD->getGetterMethodDecl())
+      if (auto *ID = MD->getClassInterface())
+        Ctx = ID;
+  }
+
+  if (Ctx->isFunctionOrMethod())
+    return;
 
   using ContextsTy = SmallVector<const DeclContext *, 8>;
   ContextsTy Contexts;
@@ -1590,11 +1662,6 @@ void NamedDecl::printQualifiedName(raw_ostream &OS,
     }
     OS << "::";
   }
-
-  if (getDeclName() || isa<DecompositionDecl>(this))
-    OS << *this;
-  else
-    OS << "(anonymous)";
 }
 
 void NamedDecl::getNameForDiagnostic(raw_ostream &OS,
@@ -1718,7 +1785,7 @@ NamedDecl *NamedDecl::getUnderlyingDeclImpl() {
 bool NamedDecl::isCXXInstanceMember() const {
   if (!isCXXClassMember())
     return false;
-  
+
   const NamedDecl *D = this;
   if (isa<UsingShadowDecl>(D))
     D = cast<UsingShadowDecl>(D)->getTargetDecl();
@@ -1937,8 +2004,8 @@ VarDecl::TLSKind VarDecl::getTLSKind() const {
 
 SourceRange VarDecl::getSourceRange() const {
   if (const Expr *Init = getInit()) {
-    SourceLocation InitEnd = Init->getLocEnd();
-    // If Init is implicit, ignore its source range and fallback on 
+    SourceLocation InitEnd = Init->getEndLoc();
+    // If Init is implicit, ignore its source range and fallback on
     // DeclaratorDecl::getSourceRange() to handle postfix elements.
     if (InitEnd.isValid() && InitEnd != getLocation())
       return SourceRange(getOuterLocStart(), InitEnd);
@@ -2166,6 +2233,22 @@ Stmt **VarDecl::getInitAddress() {
   return Init.getAddrOfPtr1();
 }
 
+VarDecl *VarDecl::getInitializingDeclaration() {
+  VarDecl *Def = nullptr;
+  for (auto I : redecls()) {
+    if (I->hasInit())
+      return I;
+
+    if (I->isThisDeclarationADefinition()) {
+      if (isStaticDataMember())
+        return I;
+      else
+        Def = I;
+    }
+  }
+  return Def;
+}
+
 bool VarDecl::isOutOfLine() const {
   if (Decl::isOutOfLine())
     return true;
@@ -2174,11 +2257,11 @@ bool VarDecl::isOutOfLine() const {
     return false;
 
   // If this static data member was instantiated from a static data member of
-  // a class template, check whether that static data member was defined 
+  // a class template, check whether that static data member was defined
   // out-of-line.
   if (VarDecl *VD = getInstantiatedFromStaticDataMember())
     return VD->isOutOfLine();
-  
+
   return false;
 }
 
@@ -2191,10 +2274,14 @@ void VarDecl::setInit(Expr *I) {
   Init = I;
 }
 
-bool VarDecl::isUsableInConstantExpressions(ASTContext &C) const {
+bool VarDecl::mightBeUsableInConstantExpressions(ASTContext &C) const {
   const LangOptions &Lang = C.getLangOpts();
 
   if (!Lang.CPlusPlus)
+    return false;
+
+  // Function parameters are never usable in constant expressions.
+  if (isa<ParmVarDecl>(this))
     return false;
 
   // In C++11, any variable of reference type can be used in a constant
@@ -2216,6 +2303,22 @@ bool VarDecl::isUsableInConstantExpressions(ASTContext &C) const {
   // Additionally, in C++11, non-volatile constexpr variables can be used in
   // constant expressions.
   return Lang.CPlusPlus11 && isConstexpr();
+}
+
+bool VarDecl::isUsableInConstantExpressions(ASTContext &Context) const {
+  // C++2a [expr.const]p3:
+  //   A variable is usable in constant expressions after its initializing
+  //   declaration is encountered...
+  const VarDecl *DefVD = nullptr;
+  const Expr *Init = getAnyInitializer(DefVD);
+  if (!Init || Init->isValueDependent() || getType()->isDependentType())
+    return false;
+  //   ... if it is a constexpr variable, or it is of reference type or of
+  //   const-qualified integral or enumeration type, ...
+  if (!DefVD->mightBeUsableInConstantExpressions(Context))
+    return false;
+  //   ... and its initializer is a constant initializer.
+  return DefVD->checkInitIsICE();
 }
 
 /// Convert the initializer for this declaration to the elaborated EvaluatedStmt
@@ -2248,7 +2351,7 @@ APValue *VarDecl::evaluateValue(
   // first time it is evaluated. FIXME: The notes won't always be emitted the
   // first time we try evaluation, so might not be produced at all.
   if (Eval->WasEvaluated)
-    return Eval->Evaluated.isUninit() ? nullptr : &Eval->Evaluated;
+    return Eval->Evaluated.isAbsent() ? nullptr : &Eval->Evaluated;
 
   const auto *Init = cast<Expr>(Eval->Value);
   assert(!Init->isValueDependent());
@@ -2343,6 +2446,10 @@ bool VarDecl::checkInitIsICE() const {
   return Eval->IsICE;
 }
 
+bool VarDecl::isParameterPack() const {
+  return isa<PackExpansionType>(getType());
+}
+
 template<typename DeclT>
 static DeclT *getDefinitionOrSelf(DeclT *D) {
   assert(D);
@@ -2351,49 +2458,70 @@ static DeclT *getDefinitionOrSelf(DeclT *D) {
   return D;
 }
 
-VarDecl *VarDecl::getTemplateInstantiationPattern() const {
-  // If it's a variable template specialization, find the template or partial
-  // specialization from which it was instantiated.
-  if (auto *VDTemplSpec = dyn_cast<VarTemplateSpecializationDecl>(this)) {
-    auto From = VDTemplSpec->getInstantiatedFrom();
-    if (auto *VTD = From.dyn_cast<VarTemplateDecl *>()) {
-      while (auto *NewVTD = VTD->getInstantiatedFromMemberTemplate()) {
-        if (NewVTD->isMemberSpecialization())
-          break;
-        VTD = NewVTD;
-      }
-      return getDefinitionOrSelf(VTD->getTemplatedDecl());
-    }
-    if (auto *VTPSD =
-            From.dyn_cast<VarTemplatePartialSpecializationDecl *>()) {
-      while (auto *NewVTPSD = VTPSD->getInstantiatedFromMember()) {
-        if (NewVTPSD->isMemberSpecialization())
-          break;
-        VTPSD = NewVTPSD;
-      }
-      return getDefinitionOrSelf<VarDecl>(VTPSD);
-    }
-  }
+bool VarDecl::isEscapingByref() const {
+  return hasAttr<BlocksAttr>() && NonParmVarDeclBits.EscapingByref;
+}
 
-  if (MemberSpecializationInfo *MSInfo = getMemberSpecializationInfo()) {
+bool VarDecl::isNonEscapingByref() const {
+  return hasAttr<BlocksAttr>() && !NonParmVarDeclBits.EscapingByref;
+}
+
+VarDecl *VarDecl::getTemplateInstantiationPattern() const {
+  const VarDecl *VD = this;
+
+  // If this is an instantiated member, walk back to the template from which
+  // it was instantiated.
+  if (MemberSpecializationInfo *MSInfo = VD->getMemberSpecializationInfo()) {
     if (isTemplateInstantiation(MSInfo->getTemplateSpecializationKind())) {
-      VarDecl *VD = getInstantiatedFromStaticDataMember();
+      VD = VD->getInstantiatedFromStaticDataMember();
       while (auto *NewVD = VD->getInstantiatedFromStaticDataMember())
         VD = NewVD;
-      return getDefinitionOrSelf(VD);
     }
   }
 
-  if (VarTemplateDecl *VarTemplate = getDescribedVarTemplate()) {
-    while (VarTemplate->getInstantiatedFromMemberTemplate()) {
-      if (VarTemplate->isMemberSpecialization())
+  // If it's an instantiated variable template specialization, find the
+  // template or partial specialization from which it was instantiated.
+  if (auto *VDTemplSpec = dyn_cast<VarTemplateSpecializationDecl>(VD)) {
+    if (isTemplateInstantiation(VDTemplSpec->getTemplateSpecializationKind())) {
+      auto From = VDTemplSpec->getInstantiatedFrom();
+      if (auto *VTD = From.dyn_cast<VarTemplateDecl *>()) {
+        while (!VTD->isMemberSpecialization()) {
+          auto *NewVTD = VTD->getInstantiatedFromMemberTemplate();
+          if (!NewVTD)
+            break;
+          VTD = NewVTD;
+        }
+        return getDefinitionOrSelf(VTD->getTemplatedDecl());
+      }
+      if (auto *VTPSD =
+              From.dyn_cast<VarTemplatePartialSpecializationDecl *>()) {
+        while (!VTPSD->isMemberSpecialization()) {
+          auto *NewVTPSD = VTPSD->getInstantiatedFromMember();
+          if (!NewVTPSD)
+            break;
+          VTPSD = NewVTPSD;
+        }
+        return getDefinitionOrSelf<VarDecl>(VTPSD);
+      }
+    }
+  }
+
+  // If this is the pattern of a variable template, find where it was
+  // instantiated from. FIXME: Is this necessary?
+  if (VarTemplateDecl *VarTemplate = VD->getDescribedVarTemplate()) {
+    while (!VarTemplate->isMemberSpecialization()) {
+      auto *NewVT = VarTemplate->getInstantiatedFromMemberTemplate();
+      if (!NewVT)
         break;
-      VarTemplate = VarTemplate->getInstantiatedFromMemberTemplate();
+      VarTemplate = NewVT;
     }
 
     return getDefinitionOrSelf(VarTemplate->getTemplatedDecl());
   }
-  return nullptr;
+
+  if (VD == this)
+    return nullptr;
+  return getDefinitionOrSelf(const_cast<VarDecl*>(VD));
 }
 
 VarDecl *VarDecl::getInstantiatedFromStaticDataMember() const {
@@ -2409,6 +2537,17 @@ TemplateSpecializationKind VarDecl::getTemplateSpecializationKind() const {
 
   if (MemberSpecializationInfo *MSI = getMemberSpecializationInfo())
     return MSI->getTemplateSpecializationKind();
+
+  return TSK_Undeclared;
+}
+
+TemplateSpecializationKind
+VarDecl::getTemplateSpecializationKindForInstantiation() const {
+  if (MemberSpecializationInfo *MSI = getMemberSpecializationInfo())
+    return MSI->getTemplateSpecializationKind();
+
+  if (const auto *Spec = dyn_cast<VarTemplateSpecializationDecl>(this))
+    return Spec->getSpecializationKind();
 
   return TSK_Undeclared;
 }
@@ -2432,6 +2571,41 @@ void VarDecl::setDescribedVarTemplate(VarTemplateDecl *Template) {
   getASTContext().setTemplateOrSpecializationInfo(this, Template);
 }
 
+bool VarDecl::isKnownToBeDefined() const {
+  const auto &LangOpts = getASTContext().getLangOpts();
+  // In CUDA mode without relocatable device code, variables of form 'extern
+  // __shared__ Foo foo[]' are pointers to the base of the GPU core's shared
+  // memory pool.  These are never undefined variables, even if they appear
+  // inside of an anon namespace or static function.
+  //
+  // With CUDA relocatable device code enabled, these variables don't get
+  // special handling; they're treated like regular extern variables.
+  if (LangOpts.CUDA && !LangOpts.GPURelocatableDeviceCode &&
+      hasExternalStorage() && hasAttr<CUDASharedAttr>() &&
+      isa<IncompleteArrayType>(getType()))
+    return true;
+
+  return hasDefinition();
+}
+
+bool VarDecl::isNoDestroy(const ASTContext &Ctx) const {
+  return hasGlobalStorage() && (hasAttr<NoDestroyAttr>() ||
+                                (!Ctx.getLangOpts().RegisterStaticDestructors &&
+                                 !hasAttr<AlwaysDestroyAttr>()));
+}
+
+QualType::DestructionKind
+VarDecl::needsDestruction(const ASTContext &Ctx) const {
+  if (EvaluatedStmt *Eval = Init.dyn_cast<EvaluatedStmt *>())
+    if (Eval->HasConstantDestruction)
+      return QualType::DK_none;
+
+  if (isNoDestroy(Ctx))
+    return QualType::DK_none;
+
+  return getType().isDestructedType();
+}
+
 MemberSpecializationInfo *VarDecl::getMemberSpecializationInfo() const {
   if (isStaticDataMember())
     // FIXME: Remove ?
@@ -2450,15 +2624,14 @@ void VarDecl::setTemplateSpecializationKind(TemplateSpecializationKind TSK,
   if (VarTemplateSpecializationDecl *Spec =
           dyn_cast<VarTemplateSpecializationDecl>(this)) {
     Spec->setSpecializationKind(TSK);
-    if (TSK != TSK_ExplicitSpecialization && PointOfInstantiation.isValid() &&
+    if (TSK != TSK_ExplicitSpecialization &&
+        PointOfInstantiation.isValid() &&
         Spec->getPointOfInstantiation().isInvalid()) {
       Spec->setPointOfInstantiation(PointOfInstantiation);
       if (ASTMutationListener *L = getASTContext().getASTMutationListener())
         L->InstantiationRequested(this);
     }
-  }
-
-  if (MemberSpecializationInfo *MSI = getMemberSpecializationInfo()) {
+  } else if (MemberSpecializationInfo *MSI = getMemberSpecializationInfo()) {
     MSI->setTemplateSpecializationKind(TSK);
     if (TSK != TSK_ExplicitSpecialization && PointOfInstantiation.isValid() &&
         MSI->getPointOfInstantiation().isInvalid()) {
@@ -2514,7 +2687,7 @@ SourceRange ParmVarDecl::getSourceRange() const {
   // DeclaratorDecl considers the range of postfix types as overlapping with the
   // declaration name, but this is not the case with parameters in ObjC methods.
   if (isa<ObjCMethodDecl>(getDeclContext()))
-    return SourceRange(DeclaratorDecl::getLocStart(), getLocation());
+    return SourceRange(DeclaratorDecl::getBeginLoc(), getLocation());
 
   return DeclaratorDecl::getSourceRange();
 }
@@ -2525,7 +2698,7 @@ Expr *ParmVarDecl::getDefaultArg() {
          "Default argument is not yet instantiated!");
 
   Expr *Arg = getInit();
-  if (auto *E = dyn_cast_or_null<ExprWithCleanups>(Arg))
+  if (auto *E = dyn_cast_or_null<FullExpr>(Arg))
     return E->getSubExpr();
 
   return Arg;
@@ -2575,10 +2748,6 @@ bool ParmVarDecl::hasDefaultArg() const {
          !Init.isNull();
 }
 
-bool ParmVarDecl::isParameterPack() const {
-  return isa<PackExpansionType>(getType());
-}
-
 void ParmVarDecl::setParameterIndexLarge(unsigned parameterIndex) {
   getASTContext().setParameterIndex(this, parameterIndex);
   ParmVarDeclBits.ParameterIndex = ParameterIndexSentinel;
@@ -2591,6 +2760,41 @@ unsigned ParmVarDecl::getParameterIndexLarge() const {
 //===----------------------------------------------------------------------===//
 // FunctionDecl Implementation
 //===----------------------------------------------------------------------===//
+
+FunctionDecl::FunctionDecl(Kind DK, ASTContext &C, DeclContext *DC,
+                           SourceLocation StartLoc,
+                           const DeclarationNameInfo &NameInfo, QualType T,
+                           TypeSourceInfo *TInfo, StorageClass S,
+                           bool isInlineSpecified,
+                           ConstexprSpecKind ConstexprKind)
+    : DeclaratorDecl(DK, DC, NameInfo.getLoc(), NameInfo.getName(), T, TInfo,
+                     StartLoc),
+      DeclContext(DK), redeclarable_base(C), ODRHash(0),
+      EndRangeLoc(NameInfo.getEndLoc()), DNLoc(NameInfo.getInfo()) {
+  assert(T.isNull() || T->isFunctionType());
+  FunctionDeclBits.SClass = S;
+  FunctionDeclBits.IsInline = isInlineSpecified;
+  FunctionDeclBits.IsInlineSpecified = isInlineSpecified;
+  FunctionDeclBits.IsVirtualAsWritten = false;
+  FunctionDeclBits.IsPure = false;
+  FunctionDeclBits.HasInheritedPrototype = false;
+  FunctionDeclBits.HasWrittenPrototype = true;
+  FunctionDeclBits.IsDeleted = false;
+  FunctionDeclBits.IsTrivial = false;
+  FunctionDeclBits.IsTrivialForCall = false;
+  FunctionDeclBits.IsDefaulted = false;
+  FunctionDeclBits.IsExplicitlyDefaulted = false;
+  FunctionDeclBits.HasImplicitReturnZero = false;
+  FunctionDeclBits.IsLateTemplateParsed = false;
+  FunctionDeclBits.ConstexprKind = ConstexprKind;
+  FunctionDeclBits.InstantiationIsPending = false;
+  FunctionDeclBits.UsesSEHTry = false;
+  FunctionDeclBits.HasSkippedBody = false;
+  FunctionDeclBits.WillHaveBody = false;
+  FunctionDeclBits.IsMultiVersion = false;
+  FunctionDeclBits.IsCopyDeductionCandidate = false;
+  FunctionDeclBits.HasODRHash = false;
+}
 
 void FunctionDecl::getNameForDiagnostic(
     raw_ostream &OS, const PrintingPolicy &Policy, bool Qualified) const {
@@ -2655,11 +2859,11 @@ Stmt *FunctionDecl::getBody(const FunctionDecl *&Definition) const {
 void FunctionDecl::setBody(Stmt *B) {
   Body = B;
   if (B)
-    EndRangeLoc = B->getLocEnd();
+    EndRangeLoc = B->getEndLoc();
 }
 
 void FunctionDecl::setPure(bool P) {
-  IsPure = P;
+  FunctionDeclBits.IsPure = P;
   if (P)
     if (auto *Parent = dyn_cast<CXXRecordDecl>(getDeclContext()))
       Parent->markedVirtualFunctionPure();
@@ -2787,8 +2991,7 @@ bool FunctionDecl::isReplaceableGlobalAllocationFunction(bool *IsAligned) const 
     Ty = Ty->getPointeeType();
     if (Ty.getCVRQualifiers() != Qualifiers::Const)
       return false;
-    const CXXRecordDecl *RD = Ty->getAsCXXRecordDecl();
-    if (RD && isNamed(RD, "nothrow_t") && RD->isInStdNamespace())
+    if (Ty->isNothrowT())
       Consume();
   }
 
@@ -2818,6 +3021,8 @@ bool FunctionDecl::isExternC() const {
 }
 
 bool FunctionDecl::isInExternCContext() const {
+  if (hasAttr<OpenCLKernelAttr>())
+    return true;
   return getLexicalDeclContext()->isExternCContext();
 }
 
@@ -2856,6 +3061,29 @@ bool FunctionDecl::isNoReturn() const {
   return false;
 }
 
+
+MultiVersionKind FunctionDecl::getMultiVersionKind() const {
+  if (hasAttr<TargetAttr>())
+    return MultiVersionKind::Target;
+  if (hasAttr<CPUDispatchAttr>())
+    return MultiVersionKind::CPUDispatch;
+  if (hasAttr<CPUSpecificAttr>())
+    return MultiVersionKind::CPUSpecific;
+  return MultiVersionKind::None;
+}
+
+bool FunctionDecl::isCPUDispatchMultiVersion() const {
+  return isMultiVersion() && hasAttr<CPUDispatchAttr>();
+}
+
+bool FunctionDecl::isCPUSpecificMultiVersion() const {
+  return isMultiVersion() && hasAttr<CPUSpecificAttr>();
+}
+
+bool FunctionDecl::isTargetMultiVersion() const {
+  return isMultiVersion() && hasAttr<TargetAttr>();
+}
+
 void
 FunctionDecl::setPreviousDeclaration(FunctionDecl *PrevDecl) {
   redeclarable_base::setPreviousDecl(PrevDecl);
@@ -2866,23 +3094,27 @@ FunctionDecl::setPreviousDeclaration(FunctionDecl *PrevDecl) {
     assert((!PrevDecl || PrevFunTmpl) && "Function/function template mismatch");
     FunTmpl->setPreviousDecl(PrevFunTmpl);
   }
-  
-  if (PrevDecl && PrevDecl->IsInline)
-    IsInline = true;
+
+  if (PrevDecl && PrevDecl->isInlined())
+    setImplicitlyInline(true);
 }
 
 FunctionDecl *FunctionDecl::getCanonicalDecl() { return getFirstDecl(); }
 
-/// \brief Returns a value indicating whether this function
-/// corresponds to a builtin function.
+/// Returns a value indicating whether this function corresponds to a builtin
+/// function.
 ///
-/// The function corresponds to a built-in function if it is
-/// declared at translation scope or within an extern "C" block and
-/// its name matches with the name of a builtin. The returned value
-/// will be 0 for functions that do not correspond to a builtin, a
-/// value of type \c Builtin::ID if in the target-independent range
-/// \c [1,Builtin::First), or a target-specific builtin value.
-unsigned FunctionDecl::getBuiltinID() const {
+/// The function corresponds to a built-in function if it is declared at
+/// translation scope or within an extern "C" block and its name matches with
+/// the name of a builtin. The returned value will be 0 for functions that do
+/// not correspond to a builtin, a value of type \c Builtin::ID if in the
+/// target-independent range \c [1,Builtin::First), or a target-specific builtin
+/// value.
+///
+/// \param ConsiderWrapperFunctions If true, we should consider wrapper
+/// functions as their wrapped builtins. This shouldn't be done in general, but
+/// it's useful in Sema to diagnose calls to wrappers based on their semantics.
+unsigned FunctionDecl::getBuiltinID(bool ConsiderWrapperFunctions) const {
   if (!getIdentifier())
     return 0;
 
@@ -2910,7 +3142,7 @@ unsigned FunctionDecl::getBuiltinID() const {
 
   // If the function is marked "overloadable", it has a different mangled name
   // and is not the C library function.
-  if (hasAttr<OverloadableAttr>())
+  if (!ConsiderWrapperFunctions && hasAttr<OverloadableAttr>())
     return 0;
 
   if (!Context.BuiltinInfo.isPredefinedLibFunction(BuiltinID))
@@ -2921,7 +3153,7 @@ unsigned FunctionDecl::getBuiltinID() const {
   // function or whether it just has the same name.
 
   // If this is a static function, it's not a builtin.
-  if (getStorageClass() == SC_Static)
+  if (!ConsiderWrapperFunctions && getStorageClass() == SC_Static)
     return 0;
 
   // OpenCL v1.2 s6.9.f - The library functions defined in
@@ -2975,7 +3207,7 @@ unsigned FunctionDecl::getMinRequiredArguments() const {
   return NumRequiredArgs;
 }
 
-/// \brief The combination of the extern and inline keywords under MSVC forces
+/// The combination of the extern and inline keywords under MSVC forces
 /// the function to be required.
 ///
 /// Note: This function assumes that we will only get called when isInlined()
@@ -3018,13 +3250,13 @@ static bool RedeclForcesDefC99(const FunctionDecl *Redecl) {
   if (Redecl->isImplicit())
     return false;
 
-  if (!Redecl->isInlineSpecified() || Redecl->getStorageClass() == SC_Extern) 
+  if (!Redecl->isInlineSpecified() || Redecl->getStorageClass() == SC_Extern)
     return true; // Not an inline definition
 
   return false;
 }
 
-/// \brief For a function declaration in C or C++, determine whether this
+/// For a function declaration in C or C++, determine whether this
 /// declaration causes the definition to be externally visible.
 ///
 /// For instance, this determines if adding the current declaration to the set
@@ -3042,6 +3274,9 @@ bool FunctionDecl::doesDeclarationForceExternallyVisibleDefinition() const {
         redeclForcesDefMSVC(this))
       return true;
   }
+
+  if (Context.getLangOpts().CPlusPlus)
+    return false;
 
   if (Context.getLangOpts().GNUInline || hasAttr<GNUInlineAttr>()) {
     // With GNU inlining, a declaration with 'inline' but not 'extern', forces
@@ -3063,7 +3298,7 @@ bool FunctionDecl::doesDeclarationForceExternallyVisibleDefinition() const {
         if (!Prev->isInlineSpecified() ||
             Prev->getStorageClass() != SC_Extern)
           return false;
-      } else if (Prev->isInlineSpecified() && 
+      } else if (Prev->isInlineSpecified() &&
                  Prev->getStorageClass() != SC_Extern) {
         return false;
       }
@@ -3071,12 +3306,9 @@ bool FunctionDecl::doesDeclarationForceExternallyVisibleDefinition() const {
     return FoundBody;
   }
 
-  if (Context.getLangOpts().CPlusPlus)
-    return false;
-
   // C99 6.7.4p6:
-  //   [...] If all of the file scope declarations for a function in a 
-  //   translation unit include the inline function specifier without extern, 
+  //   [...] If all of the file scope declarations for a function in a
+  //   translation unit include the inline function specifier without extern,
   //   then the definition in that translation unit is an inline definition.
   if (isInlineSpecified() && getStorageClass() != SC_Extern)
     return false;
@@ -3102,7 +3334,7 @@ SourceRange FunctionDecl::getReturnTypeSourceRange() const {
   // Skip self-referential return types.
   const SourceManager &SM = getASTContext().getSourceManager();
   SourceRange RTRange = FTL.getReturnLoc().getSourceRange();
-  SourceLocation Boundary = getNameInfo().getLocStart();
+  SourceLocation Boundary = getNameInfo().getBeginLoc();
   if (RTRange.isInvalid() || Boundary.isInvalid() ||
       !SM.isBeforeInTranslationUnit(RTRange.getEnd(), Boundary))
     return SourceRange();
@@ -3122,24 +3354,7 @@ SourceRange FunctionDecl::getExceptionSpecSourceRange() const {
   return FTL.getExceptionSpecRange();
 }
 
-const Attr *FunctionDecl::getUnusedResultAttr() const {
-  QualType RetType = getReturnType();
-  if (RetType->isRecordType()) {
-    if (const auto *Ret =
-            dyn_cast_or_null<RecordDecl>(RetType->getAsTagDecl())) {
-      if (const auto *R = Ret->getAttr<WarnUnusedResultAttr>())
-        return R;
-    }
-  } else if (const auto *ET = RetType->getAs<EnumType>()) {
-    if (const EnumDecl *ED = ET->getDecl()) {
-      if (const auto *R = ED->getAttr<WarnUnusedResultAttr>())
-        return R;
-    }
-  }
-  return getAttr<WarnUnusedResultAttr>();
-}
-
-/// \brief For an inline function definition in C, or for a gnu_inline function
+/// For an inline function definition in C, or for a gnu_inline function
 /// in C++, determine whether the definition will be externally visible.
 ///
 /// Inline function definitions are always available for inlining optimizations.
@@ -3152,16 +3367,17 @@ const Attr *FunctionDecl::getUnusedResultAttr() const {
 /// inline definition becomes externally visible (C99 6.7.4p6).
 ///
 /// In GNU89 mode, or if the gnu_inline attribute is attached to the function
-/// definition, we use the GNU semantics for inline, which are nearly the 
-/// opposite of C99 semantics. In particular, "inline" by itself will create 
-/// an externally visible symbol, but "extern inline" will not create an 
+/// definition, we use the GNU semantics for inline, which are nearly the
+/// opposite of C99 semantics. In particular, "inline" by itself will create
+/// an externally visible symbol, but "extern inline" will not create an
 /// externally visible symbol.
 bool FunctionDecl::isInlineDefinitionExternallyVisible() const {
-  assert((doesThisDeclarationHaveABody() || willHaveBody()) &&
+  assert((doesThisDeclarationHaveABody() || willHaveBody() ||
+          hasAttr<AliasAttr>()) &&
          "Must be a function definition");
   assert(isInlined() && "Function must be inline");
   ASTContext &Context = getASTContext();
-  
+
   if (Context.getLangOpts().GNUInline || hasAttr<GNUInlineAttr>()) {
     // Note: If you change the logic here, please change
     // doesDeclarationForceExternallyVisibleDefinition as well.
@@ -3169,17 +3385,19 @@ bool FunctionDecl::isInlineDefinitionExternallyVisible() const {
     // If it's not the case that both 'inline' and 'extern' are
     // specified on the definition, then this inline definition is
     // externally visible.
+    if (Context.getLangOpts().CPlusPlus)
+      return false;
     if (!(isInlineSpecified() && getStorageClass() == SC_Extern))
       return true;
-    
+
     // If any declaration is 'inline' but not 'extern', then this definition
     // is externally visible.
     for (auto Redecl : redecls()) {
-      if (Redecl->isInlineSpecified() && 
+      if (Redecl->isInlineSpecified() &&
           Redecl->getStorageClass() != SC_Extern)
         return true;
-    }    
-    
+    }
+
     return false;
   }
 
@@ -3188,17 +3406,17 @@ bool FunctionDecl::isInlineDefinitionExternallyVisible() const {
          "should not use C inline rules in C++");
 
   // C99 6.7.4p6:
-  //   [...] If all of the file scope declarations for a function in a 
-  //   translation unit include the inline function specifier without extern, 
+  //   [...] If all of the file scope declarations for a function in a
+  //   translation unit include the inline function specifier without extern,
   //   then the definition in that translation unit is an inline definition.
   for (auto Redecl : redecls()) {
     if (RedeclForcesDefC99(Redecl))
       return true;
   }
-  
+
   // C99 6.7.4p6:
-  //   An inline definition does not provide an external definition for the 
-  //   function, and does not forbid an external definition in another 
+  //   An inline definition does not provide an external definition for the
+  //   function, and does not forbid an external definition in another
   //   translation unit.
   return false;
 }
@@ -3245,16 +3463,22 @@ FunctionDecl *FunctionDecl::getInstantiatedFromMemberFunction() const {
 }
 
 MemberSpecializationInfo *FunctionDecl::getMemberSpecializationInfo() const {
-  return TemplateOrSpecialization.dyn_cast<MemberSpecializationInfo *>();
+  if (auto *MSI =
+          TemplateOrSpecialization.dyn_cast<MemberSpecializationInfo *>())
+    return MSI;
+  if (auto *FTSI = TemplateOrSpecialization
+                       .dyn_cast<FunctionTemplateSpecializationInfo *>())
+    return FTSI->getMemberSpecializationInfo();
+  return nullptr;
 }
 
-void 
+void
 FunctionDecl::setInstantiationOfMemberFunction(ASTContext &C,
                                                FunctionDecl *FD,
                                                TemplateSpecializationKind TSK) {
-  assert(TemplateOrSpecialization.isNull() && 
+  assert(TemplateOrSpecialization.isNull() &&
          "Member function is already a specialization");
-  MemberSpecializationInfo *Info 
+  MemberSpecializationInfo *Info
     = new (C) MemberSpecializationInfo(FD, TSK);
   TemplateOrSpecialization = Info;
 }
@@ -3264,6 +3488,8 @@ FunctionTemplateDecl *FunctionDecl::getDescribedFunctionTemplate() const {
 }
 
 void FunctionDecl::setDescribedFunctionTemplate(FunctionTemplateDecl *Template) {
+  assert(TemplateOrSpecialization.isNull() &&
+         "Member function is already a specialization");
   TemplateOrSpecialization = Template;
 }
 
@@ -3271,19 +3497,15 @@ bool FunctionDecl::isImplicitlyInstantiable() const {
   // If the function is invalid, it can't be implicitly instantiated.
   if (isInvalidDecl())
     return false;
-  
-  switch (getTemplateSpecializationKind()) {
+
+  switch (getTemplateSpecializationKindForInstantiation()) {
   case TSK_Undeclared:
   case TSK_ExplicitInstantiationDefinition:
+  case TSK_ExplicitSpecialization:
     return false;
-      
+
   case TSK_ImplicitInstantiation:
     return true;
-
-  // It is possible to instantiate TSK_ExplicitSpecialization kind
-  // if the FunctionDecl has a class scope specialization pattern.
-  case TSK_ExplicitSpecialization:
-    return getClassScopeSpecializationPattern() != nullptr;
 
   case TSK_ExplicitInstantiationDeclaration:
     // Handled below.
@@ -3295,45 +3517,31 @@ bool FunctionDecl::isImplicitlyInstantiable() const {
   bool HasPattern = false;
   if (PatternDecl)
     HasPattern = PatternDecl->hasBody(PatternDecl);
-  
+
   // C++0x [temp.explicit]p9:
   //   Except for inline functions, other explicit instantiation declarations
   //   have the effect of suppressing the implicit instantiation of the entity
-  //   to which they refer. 
-  if (!HasPattern || !PatternDecl) 
+  //   to which they refer.
+  if (!HasPattern || !PatternDecl)
     return true;
 
   return PatternDecl->isInlined();
 }
 
 bool FunctionDecl::isTemplateInstantiation() const {
-  switch (getTemplateSpecializationKind()) {
-    case TSK_Undeclared:
-    case TSK_ExplicitSpecialization:
-      return false;      
-    case TSK_ImplicitInstantiation:
-    case TSK_ExplicitInstantiationDeclaration:
-    case TSK_ExplicitInstantiationDefinition:
-      return true;
-  }
-  llvm_unreachable("All TSK values handled.");
+  // FIXME: Remove this, it's not clear what it means. (Which template
+  // specialization kind?)
+  return clang::isTemplateInstantiation(getTemplateSpecializationKind());
 }
-   
-FunctionDecl *FunctionDecl::getTemplateInstantiationPattern() const {
-  // Handle class scope explicit specialization special case.
-  if (getTemplateSpecializationKind() == TSK_ExplicitSpecialization) {
-    if (auto *Spec = getClassScopeSpecializationPattern())
-      return getDefinitionOrSelf(Spec);
-    return nullptr;
-  }
 
-  // If this is a generic lambda call operator specialization, its 
+FunctionDecl *FunctionDecl::getTemplateInstantiationPattern() const {
+  // If this is a generic lambda call operator specialization, its
   // instantiation pattern is always its primary template's pattern
-  // even if its primary template was instantiated from another 
+  // even if its primary template was instantiated from another
   // member template (which happens with nested generic lambdas).
-  // Since a lambda's call operator's body is transformed eagerly, 
-  // we don't have to go hunting for a prototype definition template 
-  // (i.e. instantiated-from-member-template) to use as an instantiation 
+  // Since a lambda's call operator's body is transformed eagerly,
+  // we don't have to go hunting for a prototype definition template
+  // (i.e. instantiated-from-member-template) to use as an instantiation
   // pattern.
 
   if (isGenericLambdaCallOperatorSpecialization(
@@ -3342,20 +3550,27 @@ FunctionDecl *FunctionDecl::getTemplateInstantiationPattern() const {
     return getDefinitionOrSelf(getPrimaryTemplate()->getTemplatedDecl());
   }
 
+  if (MemberSpecializationInfo *Info = getMemberSpecializationInfo()) {
+    if (!clang::isTemplateInstantiation(Info->getTemplateSpecializationKind()))
+      return nullptr;
+    return getDefinitionOrSelf(cast<FunctionDecl>(Info->getInstantiatedFrom()));
+  }
+
+  if (!clang::isTemplateInstantiation(getTemplateSpecializationKind()))
+    return nullptr;
+
   if (FunctionTemplateDecl *Primary = getPrimaryTemplate()) {
-    while (Primary->getInstantiatedFromMemberTemplate()) {
-      // If we have hit a point where the user provided a specialization of
-      // this template, we're done looking.
-      if (Primary->isMemberSpecialization())
+    // If we hit a point where the user provided a specialization of this
+    // template, we're done looking.
+    while (!Primary->isMemberSpecialization()) {
+      auto *NewPrimary = Primary->getInstantiatedFromMemberTemplate();
+      if (!NewPrimary)
         break;
-      Primary = Primary->getInstantiatedFromMemberTemplate();
+      Primary = NewPrimary;
     }
 
     return getDefinitionOrSelf(Primary->getTemplatedDecl());
-  } 
-
-  if (auto *MFD = getInstantiatedFromMemberFunction())
-    return getDefinitionOrSelf(MFD);
+  }
 
   return nullptr;
 }
@@ -3364,13 +3579,9 @@ FunctionTemplateDecl *FunctionDecl::getPrimaryTemplate() const {
   if (FunctionTemplateSpecializationInfo *Info
         = TemplateOrSpecialization
             .dyn_cast<FunctionTemplateSpecializationInfo*>()) {
-    return Info->Template.getPointer();
+    return Info->getTemplate();
   }
   return nullptr;
-}
-
-FunctionDecl *FunctionDecl::getClassScopeSpecializationPattern() const {
-    return getASTContext().getClassScopeSpecializationPattern(this);
 }
 
 FunctionTemplateSpecializationInfo *
@@ -3407,15 +3618,19 @@ FunctionDecl::setFunctionTemplateSpecialization(ASTContext &C,
                                                 TemplateSpecializationKind TSK,
                         const TemplateArgumentListInfo *TemplateArgsAsWritten,
                                           SourceLocation PointOfInstantiation) {
-  assert(TSK != TSK_Undeclared && 
+  assert((TemplateOrSpecialization.isNull() ||
+          TemplateOrSpecialization.is<MemberSpecializationInfo *>()) &&
+         "Member function is already a specialization");
+  assert(TSK != TSK_Undeclared &&
          "Must specify the type of function template specialization");
-  FunctionTemplateSpecializationInfo *Info
-    = TemplateOrSpecialization.dyn_cast<FunctionTemplateSpecializationInfo*>();
-  if (!Info)
-    Info = FunctionTemplateSpecializationInfo::Create(C, this, Template, TSK,
-                                                      TemplateArgs,
-                                                      TemplateArgsAsWritten,
-                                                      PointOfInstantiation);
+  assert((TemplateOrSpecialization.isNull() ||
+          TSK == TSK_ExplicitSpecialization) &&
+         "Member specialization must be an explicit specialization");
+  FunctionTemplateSpecializationInfo *Info =
+      FunctionTemplateSpecializationInfo::Create(
+          C, this, Template, TSK, TemplateArgs, TemplateArgsAsWritten,
+          PointOfInstantiation,
+          TemplateOrSpecialization.dyn_cast<MemberSpecializationInfo *>());
   TemplateOrSpecialization = Info;
   Template->addSpecialization(Info, InsertPos);
 }
@@ -3466,16 +3681,49 @@ DependentFunctionTemplateSpecializationInfo(const UnresolvedSetImpl &Ts,
 TemplateSpecializationKind FunctionDecl::getTemplateSpecializationKind() const {
   // For a function template specialization, query the specialization
   // information object.
-  FunctionTemplateSpecializationInfo *FTSInfo
-    = TemplateOrSpecialization.dyn_cast<FunctionTemplateSpecializationInfo*>();
-  if (FTSInfo)
+  if (FunctionTemplateSpecializationInfo *FTSInfo =
+          TemplateOrSpecialization
+              .dyn_cast<FunctionTemplateSpecializationInfo *>())
     return FTSInfo->getTemplateSpecializationKind();
 
-  MemberSpecializationInfo *MSInfo
-    = TemplateOrSpecialization.dyn_cast<MemberSpecializationInfo*>();
-  if (MSInfo)
+  if (MemberSpecializationInfo *MSInfo =
+          TemplateOrSpecialization.dyn_cast<MemberSpecializationInfo *>())
     return MSInfo->getTemplateSpecializationKind();
-  
+
+  return TSK_Undeclared;
+}
+
+TemplateSpecializationKind
+FunctionDecl::getTemplateSpecializationKindForInstantiation() const {
+  // This is the same as getTemplateSpecializationKind(), except that for a
+  // function that is both a function template specialization and a member
+  // specialization, we prefer the member specialization information. Eg:
+  //
+  // template<typename T> struct A {
+  //   template<typename U> void f() {}
+  //   template<> void f<int>() {}
+  // };
+  //
+  // For A<int>::f<int>():
+  // * getTemplateSpecializationKind() will return TSK_ExplicitSpecialization
+  // * getTemplateSpecializationKindForInstantiation() will return
+  //       TSK_ImplicitInstantiation
+  //
+  // This reflects the facts that A<int>::f<int> is an explicit specialization
+  // of A<int>::f, and that A<int>::f<int> should be implicitly instantiated
+  // from A::f<int> if a definition is needed.
+  if (FunctionTemplateSpecializationInfo *FTSInfo =
+          TemplateOrSpecialization
+              .dyn_cast<FunctionTemplateSpecializationInfo *>()) {
+    if (auto *MSInfo = FTSInfo->getMemberSpecializationInfo())
+      return MSInfo->getTemplateSpecializationKind();
+    return FTSInfo->getTemplateSpecializationKind();
+  }
+
+  if (MemberSpecializationInfo *MSInfo =
+          TemplateOrSpecialization.dyn_cast<MemberSpecializationInfo *>())
+    return MSInfo->getTemplateSpecializationKind();
+
   return TSK_Undeclared;
 }
 
@@ -3515,22 +3763,22 @@ SourceLocation FunctionDecl::getPointOfInstantiation() const {
   else if (MemberSpecializationInfo *MSInfo
              = TemplateOrSpecialization.dyn_cast<MemberSpecializationInfo*>())
     return MSInfo->getPointOfInstantiation();
-  
+
   return SourceLocation();
 }
 
 bool FunctionDecl::isOutOfLine() const {
   if (Decl::isOutOfLine())
     return true;
-  
-  // If this function was instantiated from a member function of a 
+
+  // If this function was instantiated from a member function of a
   // class template, check whether that member function was defined out-of-line.
   if (FunctionDecl *FD = getInstantiatedFromMemberFunction()) {
     const FunctionDecl *Definition;
     if (FD->hasBody(Definition))
       return Definition->isOutOfLine();
   }
-  
+
   // If this function was instantiated from a function template,
   // check whether that function template was defined out-of-line.
   if (FunctionTemplateDecl *FunTmpl = getPrimaryTemplate()) {
@@ -3538,7 +3786,7 @@ bool FunctionDecl::isOutOfLine() const {
     if (FunTmpl->getTemplatedDecl()->hasBody(Definition))
       return Definition->isOutOfLine();
   }
-  
+
   return false;
 }
 
@@ -3551,7 +3799,7 @@ unsigned FunctionDecl::getMemoryFunctionKind() const {
 
   if (!FnInfo)
     return 0;
-    
+
   // Builtin handling.
   switch (getBuiltinID()) {
   case Builtin::BI__builtin_memset:
@@ -3580,6 +3828,10 @@ unsigned FunctionDecl::getMemoryFunctionKind() const {
   case Builtin::BI__builtin_memcmp:
   case Builtin::BImemcmp:
     return Builtin::BImemcmp;
+
+  case Builtin::BI__builtin_bcmp:
+  case Builtin::BIbcmp:
+    return Builtin::BIbcmp;
 
   case Builtin::BI__builtin_strncpy:
   case Builtin::BI__builtin___strncpy_chk:
@@ -3621,6 +3873,8 @@ unsigned FunctionDecl::getMemoryFunctionKind() const {
         return Builtin::BImemmove;
       else if (FnInfo->isStr("memcmp"))
         return Builtin::BImemcmp;
+      else if (FnInfo->isStr("bcmp"))
+        return Builtin::BIbcmp;
       else if (FnInfo->isStr("strncpy"))
         return Builtin::BIstrncpy;
       else if (FnInfo->isStr("strncmp"))
@@ -3641,27 +3895,24 @@ unsigned FunctionDecl::getMemoryFunctionKind() const {
   return 0;
 }
 
+unsigned FunctionDecl::getODRHash() const {
+  assert(hasODRHash());
+  return ODRHash;
+}
+
 unsigned FunctionDecl::getODRHash() {
-  if (HasODRHash)
+  if (hasODRHash())
     return ODRHash;
 
-  if (FunctionDecl *Definition = getDefinition()) {
-    if (Definition != this) {
-      HasODRHash = true;
-      ODRHash = Definition->getODRHash();
-      return ODRHash;
-    }
-  }
-
   if (auto *FT = getInstantiatedFromMemberFunction()) {
-    HasODRHash = true;
+    setHasODRHash(true);
     ODRHash = FT->getODRHash();
     return ODRHash;
   }
 
   class ODRHash Hash;
   Hash.AddFunctionDecl(this);
-  HasODRHash = true;
+  setHasODRHash(true);
   ODRHash = Hash.CalculateHash();
   return ODRHash;
 }
@@ -3705,6 +3956,39 @@ bool FieldDecl::isZeroLengthBitField(const ASTContext &Ctx) const {
          getBitWidthValue(Ctx) == 0;
 }
 
+bool FieldDecl::isZeroSize(const ASTContext &Ctx) const {
+  if (isZeroLengthBitField(Ctx))
+    return true;
+
+  // C++2a [intro.object]p7:
+  //   An object has nonzero size if it
+  //     -- is not a potentially-overlapping subobject, or
+  if (!hasAttr<NoUniqueAddressAttr>())
+    return false;
+
+  //     -- is not of class type, or
+  const auto *RT = getType()->getAs<RecordType>();
+  if (!RT)
+    return false;
+  const RecordDecl *RD = RT->getDecl()->getDefinition();
+  if (!RD) {
+    assert(isInvalidDecl() && "valid field has incomplete type");
+    return false;
+  }
+
+  //     -- [has] virtual member functions or virtual base classes, or
+  //     -- has subobjects of nonzero size or bit-fields of nonzero length
+  const auto *CXXRD = cast<CXXRecordDecl>(RD);
+  if (!CXXRD->isEmpty())
+    return false;
+
+  // Otherwise, [...] the circumstances under which the object has zero size
+  // are implementation-defined.
+  // FIXME: This might be Itanium ABI specific; we don't yet know what the MS
+  // ABI will do.
+  return true;
+}
+
 unsigned FieldDecl::getFieldIndex() const {
   const FieldDecl *Canonical = getCanonicalDecl();
   if (Canonical != this)
@@ -3730,7 +4014,7 @@ SourceRange FieldDecl::getSourceRange() const {
   if (!FinalExpr)
     FinalExpr = getBitWidth();
   if (FinalExpr)
-    return SourceRange(getInnerLocStart(), FinalExpr->getLocEnd());
+    return SourceRange(getInnerLocStart(), FinalExpr->getEndLoc());
   return DeclaratorDecl::getSourceRange();
 }
 
@@ -3747,6 +4031,22 @@ void FieldDecl::setCapturedVLAType(const VariableArrayType *VLAType) {
 //===----------------------------------------------------------------------===//
 // TagDecl Implementation
 //===----------------------------------------------------------------------===//
+
+TagDecl::TagDecl(Kind DK, TagKind TK, const ASTContext &C, DeclContext *DC,
+                 SourceLocation L, IdentifierInfo *Id, TagDecl *PrevDecl,
+                 SourceLocation StartL)
+    : TypeDecl(DK, DC, L, Id, StartL), DeclContext(DK), redeclarable_base(C),
+      TypedefNameDeclOrQualifier((TypedefNameDecl *)nullptr) {
+  assert((DK != Enum || TK == TTK_Enum) &&
+         "EnumDecl not matched with TTK_Enum");
+  setPreviousDecl(PrevDecl);
+  setTagKind(TK);
+  setCompleteDefinition(false);
+  setBeingDefined(false);
+  setEmbeddedInDeclarator(false);
+  setFreeStanding(false);
+  setCompleteDefinitionRequired(false);
+}
 
 SourceLocation TagDecl::getOuterLocStart() const {
   return getTemplateOrInnerLocStart(this);
@@ -3770,7 +4070,7 @@ void TagDecl::setTypedefNameForAnonDecl(TypedefNameDecl *TDD) {
 }
 
 void TagDecl::startDefinition() {
-  IsBeingDefined = true;
+  setBeingDefined(true);
 
   if (auto *D = dyn_cast<CXXRecordDecl>(this)) {
     struct CXXRecordDecl::DefinitionData *Data =
@@ -3785,8 +4085,8 @@ void TagDecl::completeDefinition() {
           cast<CXXRecordDecl>(this)->hasDefinition()) &&
          "definition completed but not started");
 
-  IsCompleteDefinition = true;
-  IsBeingDefined = false;
+  setCompleteDefinition(true);
+  setBeingDefined(false);
 
   if (ASTMutationListener *L = getASTMutationListener())
     L->CompletedTagDefinition(this);
@@ -3797,7 +4097,7 @@ TagDecl *TagDecl::getDefinition() const {
     return const_cast<TagDecl *>(this);
 
   // If it's possible for us to have an out-of-date definition, check now.
-  if (MayHaveOutOfDateDef) {
+  if (mayHaveOutOfDateDef()) {
     if (IdentifierInfo *II = getIdentifier()) {
       if (II->isOutOfDate()) {
         updateOutOfDate(*II);
@@ -3850,6 +4150,21 @@ void TagDecl::setTemplateParameterListsInfo(
 // EnumDecl Implementation
 //===----------------------------------------------------------------------===//
 
+EnumDecl::EnumDecl(ASTContext &C, DeclContext *DC, SourceLocation StartLoc,
+                   SourceLocation IdLoc, IdentifierInfo *Id, EnumDecl *PrevDecl,
+                   bool Scoped, bool ScopedUsingClassTag, bool Fixed)
+    : TagDecl(Enum, TTK_Enum, C, DC, IdLoc, Id, PrevDecl, StartLoc) {
+  assert(Scoped || !ScopedUsingClassTag);
+  IntegerType = nullptr;
+  setNumPositiveBits(0);
+  setNumNegativeBits(0);
+  setScoped(Scoped);
+  setScopedUsingClassTag(ScopedUsingClassTag);
+  setFixed(Fixed);
+  setHasODRHash(false);
+  ODRHash = 0;
+}
+
 void EnumDecl::anchor() {}
 
 EnumDecl *EnumDecl::Create(ASTContext &C, DeclContext *DC,
@@ -3859,7 +4174,7 @@ EnumDecl *EnumDecl::Create(ASTContext &C, DeclContext *DC,
                            bool IsScopedUsingClassTag, bool IsFixed) {
   auto *Enum = new (C, DC) EnumDecl(C, DC, StartLoc, IdLoc, Id, PrevDecl,
                                     IsScoped, IsScopedUsingClassTag, IsFixed);
-  Enum->MayHaveOutOfDateDef = C.getLangOpts().Modules;
+  Enum->setMayHaveOutOfDateDef(C.getLangOpts().Modules);
   C.getTypeDeclType(Enum, PrevDecl);
   return Enum;
 }
@@ -3868,7 +4183,7 @@ EnumDecl *EnumDecl::CreateDeserialized(ASTContext &C, unsigned ID) {
   EnumDecl *Enum =
       new (C, ID) EnumDecl(C, nullptr, SourceLocation(), SourceLocation(),
                            nullptr, nullptr, false, false, false);
-  Enum->MayHaveOutOfDateDef = C.getLangOpts().Modules;
+  Enum->setMayHaveOutOfDateDef(C.getLangOpts().Modules);
   return Enum;
 }
 
@@ -3951,6 +4266,17 @@ void EnumDecl::setInstantiationOfMemberEnum(ASTContext &C, EnumDecl *ED,
   SpecializationInfo = new (C) MemberSpecializationInfo(ED, TSK);
 }
 
+unsigned EnumDecl::getODRHash() {
+  if (hasODRHash())
+    return ODRHash;
+
+  class ODRHash Hash;
+  Hash.AddEnumDecl(this);
+  setHasODRHash(true);
+  ODRHash = Hash.CalculateHash();
+  return ODRHash;
+}
+
 //===----------------------------------------------------------------------===//
 // RecordDecl Implementation
 //===----------------------------------------------------------------------===//
@@ -3959,14 +4285,21 @@ RecordDecl::RecordDecl(Kind DK, TagKind TK, const ASTContext &C,
                        DeclContext *DC, SourceLocation StartLoc,
                        SourceLocation IdLoc, IdentifierInfo *Id,
                        RecordDecl *PrevDecl)
-    : TagDecl(DK, TK, C, DC, IdLoc, Id, PrevDecl, StartLoc),
-      HasFlexibleArrayMember(false), AnonymousStructOrUnion(false),
-      HasObjectMember(false), HasVolatileMember(false),
-      LoadedFieldsFromExternalStorage(false),
-      NonTrivialToPrimitiveDefaultInitialize(false),
-      NonTrivialToPrimitiveCopy(false), NonTrivialToPrimitiveDestroy(false),
-      ParamDestroyedInCallee(false), ArgPassingRestrictions(APK_CanPassInRegs) {
-  assert(classof(static_cast<Decl*>(this)) && "Invalid Kind!");
+    : TagDecl(DK, TK, C, DC, IdLoc, Id, PrevDecl, StartLoc) {
+  assert(classof(static_cast<Decl *>(this)) && "Invalid Kind!");
+  setHasFlexibleArrayMember(false);
+  setAnonymousStructOrUnion(false);
+  setHasObjectMember(false);
+  setHasVolatileMember(false);
+  setHasLoadedFieldsFromExternalStorage(false);
+  setNonTrivialToPrimitiveDefaultInitialize(false);
+  setNonTrivialToPrimitiveCopy(false);
+  setNonTrivialToPrimitiveDestroy(false);
+  setHasNonTrivialToPrimitiveDefaultInitializeCUnion(false);
+  setHasNonTrivialToPrimitiveDestructCUnion(false);
+  setHasNonTrivialToPrimitiveCopyCUnion(false);
+  setParamDestroyedInCallee(false);
+  setArgPassingRestrictions(APK_CanPassInRegs);
 }
 
 RecordDecl *RecordDecl::Create(const ASTContext &C, TagKind TK, DeclContext *DC,
@@ -3974,7 +4307,7 @@ RecordDecl *RecordDecl::Create(const ASTContext &C, TagKind TK, DeclContext *DC,
                                IdentifierInfo *Id, RecordDecl* PrevDecl) {
   RecordDecl *R = new (C, DC) RecordDecl(Record, TK, C, DC,
                                          StartLoc, IdLoc, Id, PrevDecl);
-  R->MayHaveOutOfDateDef = C.getLangOpts().Modules;
+  R->setMayHaveOutOfDateDef(C.getLangOpts().Modules);
 
   C.getTypeDeclType(R, PrevDecl);
   return R;
@@ -3984,7 +4317,7 @@ RecordDecl *RecordDecl::CreateDeserialized(const ASTContext &C, unsigned ID) {
   RecordDecl *R =
       new (C, ID) RecordDecl(Record, TTK_Struct, C, nullptr, SourceLocation(),
                              SourceLocation(), nullptr, nullptr);
-  R->MayHaveOutOfDateDef = C.getLangOpts().Modules;
+  R->setMayHaveOutOfDateDef(C.getLangOpts().Modules);
   return R;
 }
 
@@ -4008,7 +4341,7 @@ void RecordDecl::setCapturedRecord() {
 }
 
 RecordDecl::field_iterator RecordDecl::field_begin() const {
-  if (hasExternalLexicalStorage() && !LoadedFieldsFromExternalStorage)
+  if (hasExternalLexicalStorage() && !hasLoadedFieldsFromExternalStorage())
     LoadFieldsFromExternalStorage();
 
   return field_iterator(decl_iterator(FirstDecl));
@@ -4036,7 +4369,7 @@ void RecordDecl::LoadFieldsFromExternalStorage() const {
   ExternalASTSource::Deserializing TheFields(Source);
 
   SmallVector<Decl*, 64> Decls;
-  LoadedFieldsFromExternalStorage = true;
+  setHasLoadedFieldsFromExternalStorage(true);
   Source->FindExternalLexicalDecls(this, [](Decl::Kind K) {
     return FieldDecl::classofKind(K) || IndirectFieldDecl::classofKind(K);
   }, Decls);
@@ -4118,6 +4451,16 @@ const FieldDecl *RecordDecl::findFirstNamedDataMember() const {
 // BlockDecl Implementation
 //===----------------------------------------------------------------------===//
 
+BlockDecl::BlockDecl(DeclContext *DC, SourceLocation CaretLoc)
+    : Decl(Block, DC, CaretLoc), DeclContext(Block) {
+  setIsVariadic(false);
+  setCapturesCXXThis(false);
+  setBlockMissingReturnType(true);
+  setIsConversionFromLambda(false);
+  setDoesNotEscape(false);
+  setCanAvoidCopyToHeap(false);
+}
+
 void BlockDecl::setParams(ArrayRef<ParmVarDecl *> NewParamInfo) {
   assert(!ParamInfo && "Already has param info!");
 
@@ -4131,7 +4474,7 @@ void BlockDecl::setParams(ArrayRef<ParmVarDecl *> NewParamInfo) {
 
 void BlockDecl::setCaptures(ASTContext &Context, ArrayRef<Capture> Captures,
                             bool CapturesCXXThis) {
-  this->CapturesCXXThis = CapturesCXXThis;
+  this->setCapturesCXXThis(CapturesCXXThis);
   this->NumCaptures = Captures.size();
 
   if (Captures.empty()) {
@@ -4152,7 +4495,7 @@ bool BlockDecl::capturesVariable(const VarDecl *variable) const {
 }
 
 SourceRange BlockDecl::getSourceRange() const {
-  return SourceRange(getLocation(), Body? Body->getLocEnd() : getLocation());
+  return SourceRange(getLocation(), Body ? Body->getEndLoc() : getLocation());
 }
 
 //===----------------------------------------------------------------------===//
@@ -4278,21 +4621,20 @@ FunctionDecl *FunctionDecl::Create(ASTContext &C, DeclContext *DC,
                                    SourceLocation StartLoc,
                                    const DeclarationNameInfo &NameInfo,
                                    QualType T, TypeSourceInfo *TInfo,
-                                   StorageClass SC,
-                                   bool isInlineSpecified,
+                                   StorageClass SC, bool isInlineSpecified,
                                    bool hasWrittenPrototype,
-                                   bool isConstexprSpecified) {
+                                   ConstexprSpecKind ConstexprKind) {
   FunctionDecl *New =
       new (C, DC) FunctionDecl(Function, C, DC, StartLoc, NameInfo, T, TInfo,
-                               SC, isInlineSpecified, isConstexprSpecified);
-  New->HasWrittenPrototype = hasWrittenPrototype;
+                               SC, isInlineSpecified, ConstexprKind);
+  New->setHasWrittenPrototype(hasWrittenPrototype);
   return New;
 }
 
 FunctionDecl *FunctionDecl::CreateDeserialized(ASTContext &C, unsigned ID) {
   return new (C, ID) FunctionDecl(Function, C, nullptr, SourceLocation(),
                                   DeclarationNameInfo(), QualType(), nullptr,
-                                  SC_None, false, false);
+                                  SC_None, false, CSK_unspecified);
 }
 
 BlockDecl *BlockDecl::Create(ASTContext &C, DeclContext *DC, SourceLocation L) {
@@ -4368,7 +4710,7 @@ IndirectFieldDecl *IndirectFieldDecl::CreateDeserialized(ASTContext &C,
 SourceRange EnumConstantDecl::getSourceRange() const {
   SourceLocation End = getLocation();
   if (Init)
-    End = Init->getLocEnd();
+    End = Init->getEndLoc();
   return SourceRange(getLocation(), End);
 }
 
@@ -4442,14 +4784,14 @@ SourceRange TypedefDecl::getSourceRange() const {
     if (typeIsPostfix(TInfo->getType()))
       RangeEnd = TInfo->getTypeLoc().getSourceRange().getEnd();
   }
-  return SourceRange(getLocStart(), RangeEnd);
+  return SourceRange(getBeginLoc(), RangeEnd);
 }
 
 SourceRange TypeAliasDecl::getSourceRange() const {
-  SourceLocation RangeEnd = getLocStart();
+  SourceLocation RangeEnd = getBeginLoc();
   if (TypeSourceInfo *TInfo = getTypeSourceInfo())
     RangeEnd = TInfo->getTypeLoc().getSourceRange().getEnd();
-  return SourceRange(getLocStart(), RangeEnd);
+  return SourceRange(getBeginLoc(), RangeEnd);
 }
 
 void FileScopeAsmDecl::anchor() {}
@@ -4481,7 +4823,7 @@ EmptyDecl *EmptyDecl::CreateDeserialized(ASTContext &C, unsigned ID) {
 // ImportDecl Implementation
 //===----------------------------------------------------------------------===//
 
-/// \brief Retrieve the number of module identifiers needed to name the given
+/// Retrieve the number of module identifiers needed to name the given
 /// module.
 static unsigned getNumModuleIdentifiers(Module *Mod) {
   unsigned Result = 1;
@@ -4492,7 +4834,7 @@ static unsigned getNumModuleIdentifiers(Module *Mod) {
   return Result;
 }
 
-ImportDecl::ImportDecl(DeclContext *DC, SourceLocation StartLoc, 
+ImportDecl::ImportDecl(DeclContext *DC, SourceLocation StartLoc,
                        Module *Imported,
                        ArrayRef<SourceLocation> IdentifierLocs)
   : Decl(Import, DC, StartLoc), ImportedAndComplete(Imported, true) {
@@ -4502,7 +4844,7 @@ ImportDecl::ImportDecl(DeclContext *DC, SourceLocation StartLoc,
                           StoredLocs);
 }
 
-ImportDecl::ImportDecl(DeclContext *DC, SourceLocation StartLoc, 
+ImportDecl::ImportDecl(DeclContext *DC, SourceLocation StartLoc,
                        Module *Imported, SourceLocation EndLoc)
   : Decl(Import, DC, StartLoc), ImportedAndComplete(Imported, false) {
   *getTrailingObjects<SourceLocation>() = EndLoc;

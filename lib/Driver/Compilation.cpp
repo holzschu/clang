@@ -1,9 +1,8 @@
 //===- Compilation.cpp - Compilation Task Implementation ------------------===//
 //
-//                     The LLVM Compiler Infrastructure
-//
-// This file is distributed under the University of Illinois Open Source
-// License. See LICENSE.TXT for details.
+// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
 //===----------------------------------------------------------------------===//
 
@@ -45,6 +44,11 @@ Compilation::Compilation(const Driver &D, const ToolChain &_DefaultToolChain,
 }
 
 Compilation::~Compilation() {
+  // Remove temporary files. This must be done before arguments are freed, as
+  // the file names might be derived from the input arguments.
+  if (!TheDriver.isSaveTempsEnabled() && !ForceKeepTempFiles)
+    CleanupFileList(TempFiles);
+
   delete TranslatedArgs;
   delete Args;
 
@@ -122,7 +126,7 @@ bool Compilation::CleanupFile(const char *File, bool IssueErrors) const {
   return true;
 }
 
-bool Compilation::CleanupFileList(const ArgStringList &Files,
+bool Compilation::CleanupFileList(const llvm::opt::ArgStringList &Files,
                                   bool IssueErrors) const {
   bool Success = true;
   for (const auto &File: Files)
@@ -149,30 +153,28 @@ int Compilation::ExecuteCommand(const Command &C,
   if ((getDriver().CCPrintOptions ||
        getArgs().hasArg(options::OPT_v)) && !getDriver().CCGenDiagnostics) {
     raw_ostream *OS = &llvm::errs();
+    std::unique_ptr<llvm::raw_fd_ostream> OwnedStream;
 
     // Follow gcc implementation of CC_PRINT_OPTIONS; we could also cache the
     // output stream.
     if (getDriver().CCPrintOptions && getDriver().CCPrintOptionsFilename) {
       std::error_code EC;
-      OS = new llvm::raw_fd_ostream(getDriver().CCPrintOptionsFilename, EC,
-                                    llvm::sys::fs::F_Append |
-                                        llvm::sys::fs::F_Text);
+      OwnedStream.reset(new llvm::raw_fd_ostream(
+          getDriver().CCPrintOptionsFilename, EC,
+          llvm::sys::fs::OF_Append | llvm::sys::fs::OF_Text));
       if (EC) {
         getDriver().Diag(diag::err_drv_cc_print_options_failure)
             << EC.message();
         FailingCommand = &C;
-        delete OS;
         return 1;
       }
+      OS = OwnedStream.get();
     }
 
     if (getDriver().CCPrintOptions)
       *OS << "[Logging clang options]";
 
     C.Print(*OS, "\n", /*Quote=*/getDriver().CCPrintOptions);
-
-    if (OS != &llvm::errs())
-      delete OS;
   }
 
   std::string Error;
@@ -196,10 +198,10 @@ static bool ActionFailed(const Action *A,
   if (FailingCommands.empty())
     return false;
 
-  // CUDA can have the same input source code compiled multiple times so do not
-  // compiled again if there are already failures. It is OK to abort the CUDA
-  // pipeline on errors.
-  if (A->isOffloading(Action::OFK_Cuda))
+  // CUDA/HIP can have the same input source code compiled multiple times so do
+  // not compiled again if there are already failures. It is OK to abort the
+  // CUDA pipeline on errors.
+  if (A->isOffloading(Action::OFK_Cuda) || A->isOffloading(Action::OFK_HIP))
     return true;
 
   for (const auto &CI : FailingCommands)
@@ -245,6 +247,10 @@ void Compilation::initCompilationForDiagnostics() {
   AllActions.clear();
   Jobs.clear();
 
+  // Remove temporary files.
+  if (!TheDriver.isSaveTempsEnabled() && !ForceKeepTempFiles)
+    CleanupFileList(TempFiles);
+
   // Clear temporary/results file lists.
   TempFiles.clear();
   ResultFiles.clear();
@@ -262,6 +268,9 @@ void Compilation::initCompilationForDiagnostics() {
 
   // Redirect stdout/stderr to /dev/null.
   Redirects = {None, {""}, {""}};
+
+  // Temporary files added by diagnostics should be kept.
+  ForceKeepTempFiles = true;
 }
 
 StringRef Compilation::getSysRoot() const {

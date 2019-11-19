@@ -1,9 +1,8 @@
 //===-- driver.cpp - Clang GCC-Compatible Driver --------------------------===//
 //
-//                     The LLVM Compiler Infrastructure
-//
-// This file is distributed under the University of Illinois Open Source
-// License. See LICENSE.TXT for details.
+// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
 //===----------------------------------------------------------------------===//
 //
@@ -14,6 +13,7 @@
 
 #include "clang/Driver/Driver.h"
 #include "clang/Basic/DiagnosticOptions.h"
+#include "clang/Basic/Stack.h"
 #include "clang/Driver/Compilation.h"
 #include "clang/Driver/DriverDiagnostic.h"
 #include "clang/Driver/Options.h"
@@ -26,7 +26,6 @@
 #include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/SmallString.h"
 #include "llvm/ADT/SmallVector.h"
-#include "llvm/Config/llvm-config.h"
 #include "llvm/Option/ArgList.h"
 #include "llvm/Option/OptTable.h"
 #include "llvm/Option/Option.h"
@@ -261,9 +260,9 @@ static void FixupDiagPrefixExeName(TextDiagnosticPrinter *DiagClient,
                                    const std::string &Path) {
   // If the clang binary happens to be named cl.exe for compatibility reasons,
   // use clang-cl.exe as the prefix to avoid confusion between clang and MSVC.
-  StringRef ExeBasename(llvm::sys::path::filename(Path));
-  if (ExeBasename.equals_lower("cl.exe"))
-    ExeBasename = "clang-cl.exe";
+  StringRef ExeBasename(llvm::sys::path::stem(Path));
+  if (ExeBasename.equals_lower("cl"))
+    ExeBasename = "clang-cl";
   DiagClient->setPrefix(ExeBasename);
 }
 
@@ -272,10 +271,9 @@ static void FixupDiagPrefixExeName(TextDiagnosticPrinter *DiagClient,
 static DiagnosticOptions *
 CreateAndPopulateDiagOpts(ArrayRef<const char *> argv) {
   auto *DiagOpts = new DiagnosticOptions;
-  std::unique_ptr<OptTable> Opts(createDriverOptTable());
   unsigned MissingArgIndex, MissingArgCount;
-  InputArgList Args =
-      Opts->ParseArgs(argv.slice(1), MissingArgIndex, MissingArgCount);
+  InputArgList Args = getDriverOptTable().ParseArgs(
+      argv.slice(1), MissingArgIndex, MissingArgCount);
   // We ignore MissingArgCount and the return value of ParseDiagnosticArgs.
   // Any errors that would be diagnosed here will also be diagnosed later,
   // when the DiagnosticsEngine actually exists.
@@ -321,6 +319,7 @@ static int ExecuteCC1Tool(ArrayRef<const char *> argv, StringRef Tool) {
 }
 
 int main(int argc_, const char **argv_) {
+  noteBottomOfStack();
   llvm::InitLLVM X(argc_, argv_);
   SmallVector<const char *, 256> argv(argv_, argv_ + argc_);
 
@@ -342,7 +341,7 @@ int main(int argc_, const char **argv_) {
   // response files written by clang will tokenize the same way in either mode.
   bool ClangCLMode = false;
   if (StringRef(TargetAndMode.DriverMode).equals("--driver-mode=cl") ||
-      std::find_if(argv.begin(), argv.end(), [](const char *F) {
+      llvm::find_if(argv, [](const char *F) {
         return F && strcmp(F, "--driver-mode=cl") == 0;
       }) != argv.end()) {
     ClangCLMode = true;
@@ -500,6 +499,7 @@ int main(int argc_, const char **argv_) {
   // If any timers were active but haven't been destroyed yet, print their
   // results now.  This happens in -disable-free mode.
   llvm::TimerGroup::printAll(llvm::errs());
+  llvm::TimerGroup::clearAll();
 
 #ifdef _WIN32
   // Exit status should not be negative on Win32, unless abnormal termination.

@@ -1,14 +1,13 @@
 //===- ObjCAutoreleaseWriteChecker.cpp ----------------------------*- C++ -*-==//
 //
-//                     The LLVM Compiler Infrastructure
-//
-// This file is distributed under the University of Illinois Open Source
-// License. See LICENSE.TXT for details.
+// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
 //===----------------------------------------------------------------------===//
 //
 // This file defines ObjCAutoreleaseWriteChecker which warns against writes
-// into autoreleased out parameters which are likely to cause crashes.
+// into autoreleased out parameters which cause crashes.
 // An example of a problematic write is a write to {@code error} in the example
 // below:
 //
@@ -21,12 +20,13 @@
 //     return false;
 // }
 //
-// Such code is very likely to crash due to the other queue autorelease pool
-// begin able to free the error object.
+// Such code will crash on read from `*error` due to the autorelease pool
+// in `enumerateObjectsUsingBlock` implementation freeing the error object
+// on exit from the function.
 //
 //===----------------------------------------------------------------------===//
 
-#include "ClangSACheckers.h"
+#include "clang/StaticAnalyzer/Checkers/BuiltinCheckerRegistration.h"
 #include "clang/ASTMatchers/ASTMatchFinder.h"
 #include "clang/StaticAnalyzer/Core/BugReporter/BugReporter.h"
 #include "clang/StaticAnalyzer/Core/BugReporter/BugType.h"
@@ -41,8 +41,9 @@ using namespace ast_matchers;
 namespace {
 
 const char *ProblematicWriteBind = "problematicwrite";
+const char *CapturedBind = "capturedbind";
 const char *ParamBind = "parambind";
-const char *MethodBind = "methodbind";
+const char *IsMethodBind = "ismethodbind";
 
 class ObjCAutoreleaseWriteChecker : public Checker<check::ASTCodeBody> {
 public:
@@ -110,67 +111,92 @@ static void emitDiagnostics(BoundNodes &Match, const Decl *D, BugReporter &BR,
   AnalysisDeclContext *ADC = AM.getAnalysisDeclContext(D);
 
   const auto *PVD = Match.getNodeAs<ParmVarDecl>(ParamBind);
-  assert(PVD);
   QualType Ty = PVD->getType();
   if (Ty->getPointeeType().getObjCLifetime() != Qualifiers::OCL_Autoreleasing)
     return;
-  const auto *SW = Match.getNodeAs<Expr>(ProblematicWriteBind);
-  bool IsMethod = Match.getNodeAs<ObjCMethodDecl>(MethodBind) != nullptr;
+  const char *ActionMsg = "Write to";
+  const auto *MarkedStmt = Match.getNodeAs<Expr>(ProblematicWriteBind);
+  bool IsCapture = false;
+
+  // Prefer to warn on write, but if not available, warn on capture.
+  if (!MarkedStmt) {
+    MarkedStmt = Match.getNodeAs<Expr>(CapturedBind);
+    assert(MarkedStmt);
+    ActionMsg = "Capture of";
+    IsCapture = true;
+  }
+
+  SourceRange Range = MarkedStmt->getSourceRange();
+  PathDiagnosticLocation Location = PathDiagnosticLocation::createBegin(
+      MarkedStmt, BR.getSourceManager(), ADC);
+  bool IsMethod = Match.getNodeAs<ObjCMethodDecl>(IsMethodBind) != nullptr;
   const char *Name = IsMethod ? "method" : "function";
-  assert(SW);
+
   BR.EmitBasicReport(
       ADC->getDecl(), Checker,
-      /*Name=*/"Write to autoreleasing out parameter inside autorelease pool",
-      /*Category=*/"Memory",
-      (llvm::Twine("Write to autoreleasing out parameter inside ") +
+      /*Name=*/(llvm::Twine(ActionMsg)
+                + " autoreleasing out parameter inside autorelease pool").str(),
+      /*BugCategory=*/"Memory",
+      (llvm::Twine(ActionMsg) + " autoreleasing out parameter " +
+       (IsCapture ? "'" + PVD->getName() + "'" + " " : "") + "inside " +
        "autorelease pool that may exit before " + Name + " returns; consider "
        "writing first to a strong local variable declared outside of the block")
           .str(),
-      PathDiagnosticLocation::createBegin(SW, BR.getSourceManager(), ADC),
-      SW->getSourceRange());
+      Location,
+      Range);
 }
 
 void ObjCAutoreleaseWriteChecker::checkASTCodeBody(const Decl *D,
                                                   AnalysisManager &AM,
                                                   BugReporter &BR) const {
 
+  auto DoublePointerParamM =
+      parmVarDecl(hasType(hasCanonicalType(pointerType(
+                      pointee(hasCanonicalType(objcObjectPointerType()))))))
+          .bind(ParamBind);
+
+  auto ReferencedParamM =
+      declRefExpr(to(parmVarDecl(DoublePointerParamM))).bind(CapturedBind);
+
   // Write into a binded object, e.g. *ParamBind = X.
   auto WritesIntoM = binaryOperator(
     hasLHS(unaryOperator(
         hasOperatorName("*"),
         hasUnaryOperand(
-          ignoringParenImpCasts(
-            declRefExpr(to(parmVarDecl(equalsBoundNode(ParamBind))))))
+          ignoringParenImpCasts(ReferencedParamM))
     )),
     hasOperatorName("=")
   ).bind(ProblematicWriteBind);
 
-  // WritesIntoM happens inside a block passed as an argument.
-  auto WritesInBlockM = hasAnyArgument(allOf(
-      hasType(hasCanonicalType(blockPointerType())),
-      forEachDescendant(WritesIntoM)
-      ));
+  auto ArgumentCaptureM = hasAnyArgument(
+    ignoringParenImpCasts(ReferencedParamM));
+  auto CapturedInParamM = stmt(anyOf(
+      callExpr(ArgumentCaptureM),
+      objcMessageExpr(ArgumentCaptureM)));
 
-  auto CallsAsyncM = stmt(anyOf(
+  // WritesIntoM happens inside a block passed as an argument.
+  auto WritesOrCapturesInBlockM = hasAnyArgument(allOf(
+      hasType(hasCanonicalType(blockPointerType())),
+      forEachDescendant(
+        stmt(anyOf(WritesIntoM, CapturedInParamM))
+      )));
+
+  auto BlockPassedToMarkedFuncM = stmt(anyOf(
     callExpr(allOf(
-      callsNames(FunctionsWithAutoreleasingPool), WritesInBlockM)),
+      callsNames(FunctionsWithAutoreleasingPool), WritesOrCapturesInBlockM)),
     objcMessageExpr(allOf(
        hasAnySelector(toRefs(SelectorsWithAutoreleasingPool)),
-       WritesInBlockM))
+       WritesOrCapturesInBlockM))
   ));
 
-  auto DoublePointerParamM =
-      parmVarDecl(hasType(pointerType(
-                      pointee(hasCanonicalType(objcObjectPointerType())))))
-          .bind(ParamBind);
-
-  auto HasParamAndWritesAsyncM = allOf(
+  auto HasParamAndWritesInMarkedFuncM = allOf(
       hasAnyParameter(DoublePointerParamM),
-      forEachDescendant(CallsAsyncM));
+      forEachDescendant(BlockPassedToMarkedFuncM));
 
   auto MatcherM = decl(anyOf(
-      objcMethodDecl(HasParamAndWritesAsyncM).bind(MethodBind),
-      functionDecl(HasParamAndWritesAsyncM)));
+      objcMethodDecl(HasParamAndWritesInMarkedFuncM).bind(IsMethodBind),
+      functionDecl(HasParamAndWritesInMarkedFuncM),
+      blockDecl(HasParamAndWritesInMarkedFuncM)));
 
   auto Matches = match(MatcherM, *D, AM.getASTContext());
   for (BoundNodes Match : Matches)
@@ -179,4 +205,8 @@ void ObjCAutoreleaseWriteChecker::checkASTCodeBody(const Decl *D,
 
 void ento::registerAutoreleaseWriteChecker(CheckerManager &Mgr) {
   Mgr.registerChecker<ObjCAutoreleaseWriteChecker>();
+}
+
+bool ento::shouldRegisterAutoreleaseWriteChecker(const LangOptions &LO) {
+  return true;
 }

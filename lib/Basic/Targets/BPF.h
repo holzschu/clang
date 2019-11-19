@@ -1,9 +1,8 @@
 //===--- BPF.h - Declare BPF target feature support -------------*- C++ -*-===//
 //
-//                     The LLVM Compiler Infrastructure
-//
-// This file is distributed under the University of Illinois Open Source
-// License. See LICENSE.TXT for details.
+// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
 //===----------------------------------------------------------------------===//
 //
@@ -23,6 +22,8 @@ namespace clang {
 namespace targets {
 
 class LLVM_LIBRARY_VISIBILITY BPFTargetInfo : public TargetInfo {
+  static const Builtin::Info BuiltinInfo[];
+
 public:
   BPFTargetInfo(const llvm::Triple &Triple, const TargetOptions &)
       : TargetInfo(Triple) {
@@ -47,7 +48,7 @@ public:
                         MacroBuilder &Builder) const override;
 
   bool hasFeature(StringRef Feature) const override {
-    return Feature == "bpf" || Feature == "alu32";
+    return Feature == "bpf" || Feature == "alu32" || Feature == "dwarfris";
   }
 
   void setFeatureEnabled(llvm::StringMap<bool> &Features, StringRef Name,
@@ -55,7 +56,7 @@ public:
     Features[Name] = Enabled;
   }
 
-  ArrayRef<Builtin::Info> getTargetBuiltins() const override { return None; }
+  ArrayRef<Builtin::Info> getTargetBuiltins() const override;
 
   const char *getClobbers() const override { return ""; }
 

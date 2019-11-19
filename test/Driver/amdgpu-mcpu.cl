@@ -52,6 +52,7 @@
 // AMDGCN-based processors.
 //
 
+// RUN: %clang -### -target amdgcn %s 2>&1 | FileCheck --check-prefix=GCNDEFAULT %s
 // RUN: %clang -### -target amdgcn -mcpu=gfx600 %s 2>&1 | FileCheck --check-prefix=GFX600 %s
 // RUN: %clang -### -target amdgcn -mcpu=tahiti %s 2>&1 | FileCheck --check-prefix=TAHITI %s
 // RUN: %clang -### -target amdgcn -mcpu=gfx601 %s 2>&1 | FileCheck --check-prefix=GFX601 %s
@@ -82,7 +83,15 @@
 // RUN: %clang -### -target amdgcn -mcpu=stoney %s 2>&1 | FileCheck --check-prefix=STONEY %s
 // RUN: %clang -### -target amdgcn -mcpu=gfx900 %s 2>&1 | FileCheck --check-prefix=GFX900 %s
 // RUN: %clang -### -target amdgcn -mcpu=gfx902 %s 2>&1 | FileCheck --check-prefix=GFX902 %s
+// RUN: %clang -### -target amdgcn -mcpu=gfx904 %s 2>&1 | FileCheck --check-prefix=GFX904 %s
+// RUN: %clang -### -target amdgcn -mcpu=gfx906 %s 2>&1 | FileCheck --check-prefix=GFX906 %s
+// RUN: %clang -### -target amdgcn -mcpu=gfx908 %s 2>&1 | FileCheck --check-prefix=GFX908 %s
+// RUN: %clang -### -target amdgcn -mcpu=gfx909 %s 2>&1 | FileCheck --check-prefix=GFX909 %s
+// RUN: %clang -### -target amdgcn -mcpu=gfx1010 %s 2>&1 | FileCheck --check-prefix=GFX1010 %s
+// RUN: %clang -### -target amdgcn -mcpu=gfx1011 %s 2>&1 | FileCheck --check-prefix=GFX1011 %s
+// RUN: %clang -### -target amdgcn -mcpu=gfx1012 %s 2>&1 | FileCheck --check-prefix=GFX1012 %s
 
+// GCNDEFAULT-NOT: -target-cpu
 // GFX600:    "-target-cpu" "gfx600"
 // TAHITI:    "-target-cpu" "tahiti"
 // GFX601:    "-target-cpu" "gfx601"
@@ -113,3 +122,10 @@
 // STONEY:    "-target-cpu" "stoney"
 // GFX900:    "-target-cpu" "gfx900"
 // GFX902:    "-target-cpu" "gfx902"
+// GFX904:    "-target-cpu" "gfx904"
+// GFX906:    "-target-cpu" "gfx906"
+// GFX908:    "-target-cpu" "gfx908"
+// GFX909:    "-target-cpu" "gfx909"
+// GFX1010:   "-target-cpu" "gfx1010"
+// GFX1011:   "-target-cpu" "gfx1011"
+// GFX1012:   "-target-cpu" "gfx1012"

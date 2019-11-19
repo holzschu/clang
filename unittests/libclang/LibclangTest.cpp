@@ -1,9 +1,8 @@
 //===- unittests/libclang/LibclangTest.cpp --- libclang tests -------------===//
 //
-//                     The LLVM Compiler Infrastructure
-//
-// This file is distributed under the University of Illinois Open Source
-// License. See LICENSE.TXT for details.
+// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
 //===----------------------------------------------------------------------===//
 
@@ -14,6 +13,7 @@
 #include "llvm/Support/Path.h"
 #include "llvm/Support/raw_ostream.h"
 #include "gtest/gtest.h"
+#include "TestUtils.h"
 #include <fstream>
 #include <functional>
 #include <map>
@@ -353,77 +353,6 @@ TEST(libclang, ModuleMapDescriptor) {
   clang_ModuleMapDescriptor_dispose(MMD);
 }
 
-class LibclangParseTest : public ::testing::Test {
-  std::set<std::string> Files;
-  typedef std::unique_ptr<std::string> fixed_addr_string;
-  std::map<fixed_addr_string, fixed_addr_string> UnsavedFileContents;
-public:
-  std::string TestDir;
-  CXIndex Index;
-  CXTranslationUnit ClangTU;
-  unsigned TUFlags;
-  std::vector<CXUnsavedFile> UnsavedFiles;
-
-  void SetUp() override {
-    llvm::SmallString<256> Dir;
-    ASSERT_FALSE(llvm::sys::fs::createUniqueDirectory("libclang-test", Dir));
-    TestDir = Dir.str();
-    TUFlags = CXTranslationUnit_DetailedPreprocessingRecord |
-      clang_defaultEditingTranslationUnitOptions();
-    Index = clang_createIndex(0, 0);
-    ClangTU = nullptr;
-  }
-  void TearDown() override {
-    clang_disposeTranslationUnit(ClangTU);
-    clang_disposeIndex(Index);
-    for (const std::string &Path : Files)
-      llvm::sys::fs::remove(Path);
-    llvm::sys::fs::remove(TestDir);
-  }
-  void WriteFile(std::string &Filename, const std::string &Contents) {
-    if (!llvm::sys::path::is_absolute(Filename)) {
-      llvm::SmallString<256> Path(TestDir);
-      llvm::sys::path::append(Path, Filename);
-      Filename = Path.str();
-      Files.insert(Filename);
-    }
-    llvm::sys::fs::create_directories(llvm::sys::path::parent_path(Filename));
-    std::ofstream OS(Filename);
-    OS << Contents;
-    assert(OS.good());
-  }
-  void MapUnsavedFile(std::string Filename, const std::string &Contents) {
-    if (!llvm::sys::path::is_absolute(Filename)) {
-      llvm::SmallString<256> Path(TestDir);
-      llvm::sys::path::append(Path, Filename);
-      Filename = Path.str();
-    }
-    auto it = UnsavedFileContents.insert(std::make_pair(
-        fixed_addr_string(new std::string(Filename)),
-        fixed_addr_string(new std::string(Contents))));
-    UnsavedFiles.push_back({
-        it.first->first->c_str(),   // filename
-        it.first->second->c_str(),  // contents
-        it.first->second->size()    // length
-    });
-  }
-  template<typename F>
-  void Traverse(const F &TraversalFunctor) {
-    CXCursor TuCursor = clang_getTranslationUnitCursor(ClangTU);
-    std::reference_wrapper<const F> FunctorRef = std::cref(TraversalFunctor);
-    clang_visitChildren(TuCursor,
-        &TraverseStateless<std::reference_wrapper<const F>>,
-        &FunctorRef);
-  }
-private:
-  template<typename TState>
-  static CXChildVisitResult TraverseStateless(CXCursor cx, CXCursor parent,
-      CXClientData data) {
-    TState *State = static_cast<TState*>(data);
-    return State->get()(cx, parent);
-  }
-};
-
 TEST_F(LibclangParseTest, AllSkippedRanges) {
   std::string Header = "header.h", Main = "main.cpp";
   WriteFile(Header,
@@ -461,21 +390,65 @@ TEST_F(LibclangParseTest, AllSkippedRanges) {
   clang_disposeSourceRangeList(Ranges);
 }
 
+TEST_F(LibclangParseTest, EvaluateChildExpression) {
+  std::string Main = "main.m";
+  WriteFile(Main, "#define kFOO @\"foo\"\n"
+                  "void foobar(void) {\n"
+                  " {kFOO;}\n"
+                  "}\n");
+  ClangTU = clang_parseTranslationUnit(Index, Main.c_str(), nullptr, 0, nullptr,
+                                       0, TUFlags);
+
+  CXCursor C = clang_getTranslationUnitCursor(ClangTU);
+  clang_visitChildren(
+      C,
+      [](CXCursor cursor, CXCursor parent,
+         CXClientData client_data) -> CXChildVisitResult {
+        if (clang_getCursorKind(cursor) == CXCursor_FunctionDecl) {
+          int numberedStmt = 0;
+          clang_visitChildren(
+              cursor,
+              [](CXCursor cursor, CXCursor parent,
+                 CXClientData client_data) -> CXChildVisitResult {
+                int &numberedStmt = *((int *)client_data);
+                if (clang_getCursorKind(cursor) == CXCursor_CompoundStmt) {
+                  if (numberedStmt) {
+                    CXEvalResult RE = clang_Cursor_Evaluate(cursor);
+                    EXPECT_NE(RE, nullptr);
+                    EXPECT_EQ(clang_EvalResult_getKind(RE),
+                              CXEval_ObjCStrLiteral);
+                    clang_EvalResult_dispose(RE);
+                    return CXChildVisit_Break;
+                  }
+                  numberedStmt++;
+                }
+                return CXChildVisit_Recurse;
+              },
+              &numberedStmt);
+          EXPECT_EQ(numberedStmt, 1);
+        }
+        return CXChildVisit_Continue;
+      },
+      nullptr);
+}
+
 class LibclangReparseTest : public LibclangParseTest {
 public:
   void DisplayDiagnostics() {
     unsigned NumDiagnostics = clang_getNumDiagnostics(ClangTU);
     for (unsigned i = 0; i < NumDiagnostics; ++i) {
       auto Diag = clang_getDiagnostic(ClangTU, i);
-      DEBUG(llvm::dbgs() << clang_getCString(clang_formatDiagnostic(
-          Diag, clang_defaultDiagnosticDisplayOptions())) << "\n");
+      LLVM_DEBUG(llvm::dbgs()
+                 << clang_getCString(clang_formatDiagnostic(
+                        Diag, clang_defaultDiagnosticDisplayOptions()))
+                 << "\n");
       clang_disposeDiagnostic(Diag);
     }
   }
   bool ReparseTU(unsigned num_unsaved_files, CXUnsavedFile* unsaved_files) {
     if (clang_reparseTranslationUnit(ClangTU, num_unsaved_files, unsaved_files,
                                      clang_defaultReparseOptions(ClangTU))) {
-      DEBUG(llvm::dbgs() << "Reparse failed\n");
+      LLVM_DEBUG(llvm::dbgs() << "Reparse failed\n");
       return false;
     }
     DisplayDiagnostics();
@@ -706,7 +679,7 @@ public:
     unsigned options = clang_defaultSaveOptions(ClangTU);
     if (clang_saveTranslationUnit(ClangTU, Filename.c_str(), options) !=
         CXSaveError_None) {
-      DEBUG(llvm::dbgs() << "Saving failed\n");
+      LLVM_DEBUG(llvm::dbgs() << "Saving failed\n");
       return false;
     }
 
@@ -715,7 +688,7 @@ public:
     ClangTU = clang_createTranslationUnit(Index, Filename.c_str());
 
     if (!ClangTU) {
-      DEBUG(llvm::dbgs() << "Loading failed\n");
+      LLVM_DEBUG(llvm::dbgs() << "Loading failed\n");
       return false;
     }
 
