@@ -98,7 +98,15 @@ WebAssembly::WebAssembly(const Driver &D, const llvm::Triple &Triple,
 
   assert(Triple.isArch32Bit() != Triple.isArch64Bit());
 
+#if TARGET_OS_IPHONE || TARGET_IPHONE_SIMULATOR
+		// on iOS, compilers are installed elsewhere, but we pretend they are in 
+		// $SYSROOT/usr/bin 
+      llvm::SmallString<128> P = Sysroot;
+      llvm::sys::path::append(P, "usr", "bin");
+	  getProgramPaths().push_back(P);
+#else    	
   getProgramPaths().push_back(getDriver().getInstalledDir());
+#endif
 
   if (getTriple().getOS() == llvm::Triple::UnknownOS) {
     // Theoretically an "unknown" OS should mean no standard libraries, however

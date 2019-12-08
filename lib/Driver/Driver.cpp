@@ -86,6 +86,14 @@
 #include <sysexits.h> // EX_IOERR
 #endif
 
+#ifdef __APPLE__
+#include <TargetConditionals.h>
+#if (TARGET_OS_IPHONE || TARGET_IPHONE_SIMULATOR)
+#include "ios_error.h"
+#endif
+#endif 
+
+
 using namespace clang::driver;
 using namespace clang;
 using namespace llvm::opt;
@@ -131,6 +139,10 @@ Driver::Driver(StringRef ClangExecutable, StringRef TargetTriple,
       CheckInputsExist(true), GenReproducer(false),
       SuppressMissingInputWarning(false) {
 
+#if TARGET_OS_IPHONE || TARGET_IPHONE_SIMULATOR
+	// sysroot location depends on App location, which is unknown at compile time:
+	SysRoot = ::getenv("SYSROOT");
+#endif
   // Provide a sane fallback if no VFS is specified.
   if (!this->VFS)
     this->VFS = llvm::vfs::getRealFileSystem();
